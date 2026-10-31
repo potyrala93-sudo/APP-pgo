@@ -9,7 +9,7 @@ window.PGO_CONFIG = {
   // Planilhas do Google (precisam estar como "Qualquer pessoa com o link pode ver").
   // É o código que fica no endereço entre /d/ e /edit. Só a primeira aba de cada planilha é lida.
   PLANILHAS: {
-    equipes:  '1WzVvLjdpyhIYt94aC4Fsx673gWDWIHlM7-qbtm-92hE',   // colunas: CDC | EQUIPE | TIPO (Manual ou Mecanizado)
+    equipes:  '1WzVvLjdpyhIYt94aC4Fsx673gWDWIHlM7-qbtm-92hE',   // colunas: CDC | EQUIPE | TIPO (Manual ou Mecanizado) | METAS (R$ por dia)
     fazendas: '1sJpnNfEwwEbaFHkkLW-yWKN4wyGweZvKN0zu0Q3DhoQ',   // colunas: CDC | FAZENDA | UP | AREA
     insumos:  '1WFNQStJs89TY6_TtFuOaOlGsC7lUvHZQk7GTiGfOyoA',   // colunas: CDC | INSUMO
     atividades: '1f3LdnqVdRCM9Mg8pjHWqe5udhwoPBtNKcXxeVSckFag', // colunas: REGIME | ATIVIDADE | TARIFAS (R$ por ha ou por hora)

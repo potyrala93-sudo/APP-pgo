@@ -76,6 +76,8 @@
     whats: 'M4 20l1.4-4.2A8 8 0 1 1 8.4 19z',
     camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
     copiar: 'M9 9h11v11H9zM5 15H4V4h11v1',
+    lista: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
+    equipe: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 3.5a4 4 0 0 1 0 7.5M19 14a6 6 0 0 1 3 5.2V21',
   };
   const ic = (n, s) => `<svg width="${s || 22}" height="${s || 22}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[n]}"/></svg>`;
 
@@ -113,7 +115,8 @@
   const S = {
     sb: null, user: ler('pgo.usuario', null),
     base: Object.assign({ equipes: [], fazendas: [], insumos: [], atividades: [], em: null }, ler('pgo.base', {})),
-    regs: [], valores: {}, janela: 60, nDias: 5,
+    regs: [], valores: {}, janela: 60, nDias: 3,
+    filtro: { periodo: '30', equipe: '', tipo: '', busca: '', buscando: false },
     enviando: false,
   };
   const chaveFila = () => 'pgo.fila2.' + (S.user ? S.user.id : '');
@@ -201,7 +204,7 @@
     try {
       const [eq, fz, ins, atv] = await Promise.all([planilha(PLANILHAS.equipes), planilha(PLANILHAS.fazendas), planilha(PLANILHAS.insumos), planilha(PLANILHAS.atividades)]);
       S.base = {
-        equipes: eq.map((r) => ({ cdc: r.cdc, equipe: r.equipe, tipo: /mec/i.test(r.tipo) ? 'Mecanizado' : /man/i.test(r.tipo) ? 'Manual' : (r.tipo || '') })).filter((r) => r.equipe),
+        equipes: eq.map((r) => { const m = lerNum(r.metas || r.meta); return { cdc: r.cdc, equipe: r.equipe, tipo: /mec/i.test(r.tipo) ? 'Mecanizado' : /man/i.test(r.tipo) ? 'Manual' : (r.tipo || ''), meta: Number.isFinite(m) && m > 0 ? m : null }; }).filter((r) => r.equipe),
         fazendas: fz.map((r) => ({ cdc: r.cdc, fazenda: r.fazenda, up: r.up || r.talhao, area: lerNum(r.area) })).filter((r) => r.fazenda && r.up),
         insumos: ins.map((r) => ({ cdc: r.cdc, insumo: r.insumo })).filter((r) => r.insumo),
         atividades: atv.map((r) => { const t = lerNum(r.tarifas || r.tarifa); return { cdc: r.cdc, regime: r.regime || '', atividade: r.atividade, tarifa: Number.isFinite(t) ? t : null }; }).filter((r) => r.atividade),
@@ -283,7 +286,7 @@
       }
       await carregarDados();
     } catch (e) { if (!redeErro(e)) console.warn(e); }
-    finally { S.enviando = false; barra(); if (rotaAtual() === 'home') render(); }
+    finally { S.enviando = false; barra(); if (rotaAtual() === 'home' || rotaAtual() === 'registros') render(); }
   }
   window.addEventListener('online', () => { barra(); enviarFila(); });
   window.addEventListener('offline', barra);
@@ -376,13 +379,14 @@
   // =========================================================
   //   Estrutura e rotas
   // =========================================================
-  const ROTAS = { home: 1, apontamento: 1, diarias: 1, paradas: 1, valores: 1 };
+  const ROTAS = { home: 1, apontamento: 1, diarias: 1, paradas: 1, valores: 1, registros: 1 };
   function shell() {
     app().innerHTML = `
       <header class="topbar"><a class="menu-btn" href="../APP-menu/" aria-label="Voltar ao menu dos apps" title="Menu dos apps">${ic('menu', 18)}<span>Menu</span></a>
         <div class="brand"><span class="tag">PGO Digital</span></div>
         <div class="spacer"></div>
         <span class="net" id="net" hidden></span>
+        <a class="btn btn-ghost btn-sm top-val" href="#/valores" title="Valores por hora e tarifas">${ic('valor', 18)}<span>Valores</span></a>
         <button class="icon-btn" id="b-sair" title="Sair" aria-label="Sair">${ic('sair', 20)}</button></header>
       <main class="view" id="view" tabindex="-1"></main>`;
     $('#b-sair').onclick = sair;
@@ -405,22 +409,36 @@
     if (!S.user || !$('#view')) return;
     const r = rotaAtual(); const view = $('#view'); const chave = location.hash;
     if (!trocou && view.dataset.rota === chave && $('form[data-sujo="1"]', view)) return;   // não apaga o que está sendo digitado
-    if (!trocou && r !== 'home' && view.dataset.rota === chave) return;                  // formulários só redesenham ao entrar
+    if (!trocou && r !== 'home' && r !== 'registros' && view.dataset.rota === chave) return;                  // formulários só redesenham ao entrar
     const mudou = view.dataset.rota !== chave; view.dataset.rota = chave;
-    ({ home: vHome, apontamento: vApontamento, diarias: vDiarias, paradas: vParadas, valores: vValores })[r](view);
+    ({ home: vHome, apontamento: vApontamento, diarias: vDiarias, paradas: vParadas, valores: vValores, registros: vRegistros })[r](view);
     if (mudou) { window.scrollTo(0, 0); view.focus({ preventScroll: true }); }
   }
   const cabecalho = (titulo, sub) => `<div class="sub-head"><a class="btn btn-ghost btn-sm" href="#/home">${ic('voltar', 18)} Início</a></div>
     <div class="page-head"><div><h1>${h(titulo)}</h1>${sub ? `<p>${sub}</p>` : ''}</div></div>`;
 
   // =========================================================
-  //   Cálculos do dia (faturamento, horas, insumos)
+  //   Cálculos (faturamento, horas, insumos) por equipe e dia
   // =========================================================
-  const metaDia = () => { const v = S.valores._meta; return v && v.valor != null && v.valor !== '' && Number(v.valor) > 0 ? Number(v.valor) : null; };
   const sinal = (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + brl(Math.abs(v));
   const daMeta = (v, meta) => (meta ? (v / meta * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '% da meta' : '');
   const valorHora = (rec) => { const v = S.valores[rec]; return v && v.valor != null && v.valor !== '' ? Number(v.valor) : null; };
-  function calcular(regs) {
+  const SEM_EQUIPE = 'Sem equipe';
+  const equipeDe = (r) => r.equipe || SEM_EQUIPE;
+  // meta da equipe: coluna METAS da planilha de equipes
+  function metaEquipe(eq) {
+    if (!eq) return null;
+    const l = S.base.equipes || [];
+    const e = l.find((x) => igual(x.equipe, eq) && (!x.cdc || !S.user || igual(x.cdc, S.user.cdc))) || l.find((x) => igual(x.equipe, eq));
+    return e && e.meta > 0 ? e.meta : null;
+  }
+  // meta do grupo (dia + equipe): a gravada no lançamento; se não houver, a atual da planilha
+  function metaGrupo(regs) {
+    const ord = regs.slice().sort((a, b) => (b.tipo === 'apontamento') - (a.tipo === 'apontamento'));
+    const r = ord.find((x) => x.meta != null && x.meta !== '' && Number(x.meta) > 0);
+    return r ? Number(r.meta) : metaEquipe((regs[0] || {}).equipe);
+  }
+  function calcular(regs, meta) {
     const atv = [], dia = [], par = [], ins = {}, equipes = [];
     for (const r of regs) {
       for (const a of r.atividades || []) {
@@ -443,9 +461,10 @@
     const soma = (l, k) => l.reduce((s, x) => s + (Number(x[k]) || 0), 0);
     const sem = soma(atv, 'valor'), vd = soma(dia, 'valor');
     const porChave = (l, k) => { const o = {}; l.forEach((x) => { const c = x[k] || '—'; o[c] = o[c] || { horas: 0, valor: 0, n: 0, min: 0 }; o[c].horas += x.horas; o[c].valor += Number(x.valor) || 0; o[c].n += x.qt; o[c].min += x.mb; }); return o; };
+    meta = meta > 0 ? meta : null;
     return {
-      atv, dia, par, ins, equipes, sem, vd, com: sem + vd, meta: metaDia(),
-      dCom: metaDia() != null ? sem + vd - metaDia() : null, dSem: metaDia() != null ? sem - metaDia() : null,
+      atv, dia, par, ins, equipes, sem, vd, com: sem + vd, meta,
+      dCom: meta != null ? sem + vd - meta : null, dSem: meta != null ? sem - meta : null,
       ha: soma(atv.filter((a) => a.un === 'ha'), 'q'), hAtv: soma(atv.filter((a) => a.un === 'h'), 'q'),
       hDia: soma(dia, 'horas'), hPar: soma(par, 'horas'), impacto: soma(par, 'valor'),
       diaPorRec: porChave(dia, 'recurso'), parPorMot: porChave(par, 'motivo'), parPorRec: porChave(par, 'recurso'),
@@ -454,11 +473,23 @@
       semTarifa: [...new Set(atv.filter((a) => a.tarifa == null).map((a) => a.atividade))],
     };
   }
-  const deDia = (d) => visao().filter((x) => dia10(x.data) === d);
+  // agrupa os lançamentos por dia e equipe
+  function grupos(lista) {
+    const m = new Map();
+    for (const r of lista) {
+      const k = dia10(r.data) + '|' + equipeDe(r);
+      if (!m.has(k)) m.set(k, { chave: k, d: dia10(r.data), equipe: equipeDe(r), regs: [] });
+      m.get(k).regs.push(r);
+    }
+    return [...m.values()].sort((a, b) => b.d.localeCompare(a.d) || (a.equipe === SEM_EQUIPE) - (b.equipe === SEM_EQUIPE) || a.equipe.localeCompare(b.equipe, 'pt-BR', { numeric: true }));
+  }
+  const grupo = (chave) => grupos(visao()).find((g) => g.chave === chave) || null;
+  const tipoEquipe = (g) => (g.regs.find((r) => r.equipe_tipo) || {}).equipe_tipo || (equipes().find((e) => e.equipe === g.equipe) || {}).tipo || '';
+  const fotosEquipe = (regs) => regs.flatMap((r) => (r.fotos || []).filter((f) => f.tipo === 'equipe'));
   const TIPO = { apontamento: 'Apontamento', diarias: 'Diárias', paradas: 'Horas paradas' };
   const ICONE = { apontamento: 'apont', diarias: 'diaria', paradas: 'parada' };
   function tituloReg(r) {
-    if (r.tipo === 'apontamento') return r.equipe || 'Apontamento';
+    if (r.tipo === 'apontamento') return 'Apontamento';
     if (r.tipo === 'diarias') return (r.diarias || []).length === 1 ? 'Diária' : `${(r.diarias || []).length} diárias`;
     return (r.paradas || []).length === 1 ? 'Hora parada' : `${(r.paradas || []).length} horas paradas`;
   }
@@ -469,73 +500,158 @@
     else if (c.dia.length) p.push(`${plural(c.dia.length, 'diária', 'diárias')} · ${horasTxt(c.hDia)}`);
     if (r.tipo === 'paradas') p.push(...Object.entries(c.parPorMot).map(([k, v]) => `${k} · ${duracao(v.min)}`));
     else if (c.par.length) p.push(`${plural(c.par.length, 'parada', 'paradas')} · ${duracao(c.par.reduce((s, x) => s + x.mb, 0))}`);
+    if (fotosEquipe([r]).length) p.push('foto da equipe');
     return p.join(' · ');
   }
+  const textoBusca = (r) => [equipeDe(r), TIPO[r.tipo], r.observacao, ...(r.atividades || []).flatMap((a) => [a.atividade, a.fazenda, 'up ' + a.up, a.situacao, ...(a.insumos || []).map((i) => i.insumo)]),
+    ...(r.diarias || []).flatMap((d) => [d.diaria, d.recurso, d.fazenda, 'up ' + d.up]), ...(r.paradas || []).flatMap((p) => [p.motivo, p.recurso, p.fazenda, 'up ' + p.up])].join(' ');
   const etiquetaFila = (x) => (x._erro ? '<span class="st erro">Recusado</span>' : x._fila ? `<span class="st fila">${ic('nuvem', 14)} Na fila</span>` : '');
+  const paraEnvio = (r) => { const d = clonar(r); ['_fila', '_erro', 'usuario_id', 'cdc', 'atualizado_em'].forEach((k) => delete d[k]); return d; };
 
   // =========================================================
-  //   Início: atalhos + cartões dos dias
+  //   Início: grade 2×2 + últimos lançamentos (por dia e equipe)
   // =========================================================
   function vHome(view) {
     const v = visao(); const comErro = fila().filter((x) => x.erro).length;
-    const dias = [...new Set(v.map((x) => dia10(x.data)))].sort().reverse();
+    const gs = grupos(v); const dias = [...new Set(gs.map((g) => g.d))];
     const mostrar = dias.slice(0, S.nDias);
     view.innerHTML = `
       <div class="ola"><p class="muted">${h(new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' }))}</p>
         <h1>Olá, ${h(S.user.nome.split(' ')[0])}</h1><p class="muted">${h(S.user.cdc)}</p></div>
       ${comErro ? `<p class="alert alert-erro">${comErro} lançamento(s) recusado(s) pelo servidor. Abra o lançamento marcado como "Recusado" para corrigir.</p>` : ''}
-      <nav class="atalhos" aria-label="Lançar">
-        <a class="atalho a1" href="#/apontamento"><span class="ico">${ic('apont', 30)}</span><b>Apontamento</b><small>Equipe, atividades, diárias, insumos e paradas</small></a>
-        <a class="atalho a2" href="#/diarias"><span class="ico">${ic('diaria', 30)}</span><b>Diárias</b><small>Uma ou várias diárias com horário</small></a>
-        <a class="atalho a3" href="#/paradas"><span class="ico">${ic('parada', 30)}</span><b>Horas Paradas</b><small>Motivo, tipo e horário da parada</small></a>
-        <a class="atalho a4" href="#/valores"><span class="ico">${ic('valor', 30)}</span><b>Valores</b><small>Valor por hora das diárias e tarifas</small></a>
+      <nav class="grade" aria-label="Menu do PGO">
+        <a class="tile t1" href="#/apontamento"><span class="ico">${ic('apont', 28)}</span><b>Apontamento</b><small>Atividades, diárias, insumos e paradas</small></a>
+        <a class="tile t2" href="#/diarias"><span class="ico">${ic('diaria', 28)}</span><b>Diárias</b><small>Uma ou várias, com horário</small></a>
+        <a class="tile t3" href="#/paradas"><span class="ico">${ic('parada', 28)}</span><b>Horas paradas</b><small>Motivo, tipo e horário</small></a>
+        <a class="tile t4" href="#/registros"><span class="ico">${ic('lista', 28)}</span><b>Meus registros</b><small>Histórico, editar e excluir</small></a>
       </nav>
       ${S.base.em ? '' : '<p class="alert alert-warn">Ainda não consegui ler as planilhas de equipes, fazendas, insumos e atividades. Conecte-se à internet.</p>'}
-      <h2 class="sec-tit">Meus lançamentos</h2>
-      ${mostrar.length ? mostrar.map((d) => cartaoDia(d, v.filter((x) => dia10(x.data) === d))).join('')
+      <div class="sec-tit"><h2>Últimos lançamentos</h2>${v.length ? '<a class="btn btn-ghost btn-sm" href="#/registros">Ver todos</a>' : ''}</div>
+      ${mostrar.length ? mostrar.map((d) => blocoDia(d, gs.filter((g) => g.d === d))).join('')
         : '<div class="empty"><strong>Nenhum lançamento ainda</strong>Use os botões acima para lançar o seu primeiro apontamento.</div>'}
-      ${dias.length > S.nDias || mostrar.length ? `<button class="btn btn-ghost btn-block" id="mais-dias">Mostrar dias anteriores</button>` : ''}`;
-    $$('[data-reg]', view).forEach((b) => (b.onclick = () => detalhe(b.dataset.reg)));
-    $$('[data-editar]', view).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); editar(b.dataset.editar); }));
-    $$('[data-pdf]', view).forEach((b) => (b.onclick = () => gerarPDF(b.dataset.pdf)));
-    $$('[data-whats]', view).forEach((b) => (b.onclick = () => compartilhar(b.dataset.whats)));
-    const mais = $('#mais-dias', view);
-    if (mais) mais.onclick = async () => {
-      if (dias.length > S.nDias) { S.nDias += 5; return render(true); }
-      if (!navigator.onLine) return toast('Sem internet para buscar dias anteriores.');
-      mais.disabled = true; mais.textContent = 'Buscando…';
-      const antes = dias.length; S.janela += 120; await carregarDados();
-      const agora = new Set(visao().map((x) => dia10(x.data))).size;
-      if (agora > antes) S.nDias += 5; else toast('Não há lançamentos mais antigos.');
-      render(true);
-    };
+      ${dias.length > S.nDias ? '<button class="btn btn-ghost btn-block mais" id="mais-dias">Mostrar mais dias</button>' : ''}`;
+    ligarCartoes(view);
+    const mais = $('#mais-dias', view); if (mais) mais.onclick = () => { S.nDias += 3; render(true); };
   }
-  function cartaoDia(d, regs) {
-    const c = calcular(regs); const ehHoje = d === hoje();
+  const blocoDia = (d, gs) => `<section class="dia-bloco"><h3 class="dia-tit">${dataBR(d)} <span>${diaSemana(d)}</span>${d === hoje() ? '<em class="hj">Hoje</em>' : ''}</h3>
+    ${gs.map(cartaoEquipe).join('')}</section>`;
+  function cartaoEquipe(g) {
+    const meta = metaGrupo(g.regs); const c = calcular(g.regs, meta); const fotoEq = fotosEquipe(g.regs)[0];
     const alertas = [];
     if (c.faltaValor.length) alertas.push(`<a href="#/valores">Cadastre o valor/hora de ${h(c.faltaValor.join(', '))}</a> para calcular as diárias.`);
     if (c.semTarifa.length) alertas.push(`Sem tarifa na planilha: ${h(c.semTarifa.join(', '))}.`);
-    const prod = [c.ha ? `<b>${num(c.ha)}</b> ha` : '', c.hAtv ? `<b>${num(c.hAtv)}</b> h de atividade` : '', c.dia.length ? `<b>${horasTxt(c.hDia)}</b> de diárias` : '', c.par.length ? `<b>${horasTxt(c.hPar)}</b> paradas` : ''].filter(Boolean);
-    return `<article class="dia-card">
-      <header class="dc-head"><div><h3>${dataBR(d)} <span>${diaSemana(d)}</span>${ehHoje ? '<em class="hj">Hoje</em>' : ''}</h3>
-        <p class="dc-prod">${prod.join(' · ') || 'Sem produção lançada'}</p></div></header>
-      ${c.atv.length || c.dia.length ? `<div class="fat">
-        <div class="meta"><span>Meta</span>${c.meta != null ? `<b>${brl(c.meta)}</b>` : '<a href="#/valores">Cadastrar meta</a>'}</div>
-        <div class="${c.dCom == null ? '' : c.dCom >= 0 ? 'pos' : 'neg'}"><span>Com diárias</span><b>${brl(c.com)}</b>${c.dCom != null ? `<small class="dl">Δ ${sinal(c.dCom)}</small>` : ''}</div>
-        <div class="${c.dSem == null ? '' : c.dSem >= 0 ? 'pos' : 'neg'}"><span>Sem diárias</span><b>${brl(c.sem)}</b>${c.dSem != null ? `<small class="dl">Δ ${sinal(c.dSem)}</small>` : ''}</div>
+    if (meta == null && g.equipe !== SEM_EQUIPE && (c.atv.length || c.dia.length)) alertas.push('Equipe sem meta na planilha de equipes (coluna METAS).');
+    const prod = [c.ha ? `<b>${num(c.ha)}</b> ha` : '', c.hAtv ? `<b>${num(c.hAtv)}</b> h` : '', c.dia.length ? `<b>${horasTxt(c.hDia)}</b> diárias` : '', c.par.length ? `<b>${horasTxt(c.hPar)}</b> paradas` : ''].filter(Boolean);
+    const caixa = (rot, val, delta) => `<div class="${delta == null ? '' : delta >= 0 ? 'pos' : 'neg'}"><span>${rot}</span><b>${brl(val)}</b>${delta != null ? `<small class="dl">Δ ${sinal(delta)}</small>` : ''}</div>`;
+    return `<article class="eq-card">
+      <header class="ec-head">
+        ${fotoEq ? `<button class="ec-foto" data-ver="${h(fotoEq.path)}" aria-label="Ver foto da equipe"><img alt="" data-path="${h(fotoEq.path)}"></button>` : `<span class="ec-foto vazio" aria-hidden="true">${ic('equipe', 22)}</span>`}
+        <div class="ec-tit"><h4>${h(g.equipe)}</h4><p>${[h(tipoEquipe(g)), prod.join(' · ')].filter(Boolean).join(' · ') || 'Sem produção lançada'}</p></div></header>
+      ${c.atv.length || c.dia.length || meta != null ? `<div class="fat">
+        <div class="meta"><span>Meta</span><b>${meta != null ? brl(meta) : '—'}</b></div>
+        ${caixa('Com diárias', c.com, c.dCom)}${caixa('Sem diárias', c.sem, c.dSem)}
       </div>` : ''}
       ${alertas.length ? `<p class="dc-alerta">${alertas.join('<br>')}</p>` : ''}
-      <div class="dc-lista">${regs.map((r) => `<div class="dc-item">
-        <button class="dc-abrir" data-reg="${h(r.id)}"><span class="dc-ico t-${r.tipo}">${ic(ICONE[r.tipo], 18)}</span>
-          <span class="dc-txt"><span class="l-top"><b>${h(tituloReg(r))}</b>${etiquetaFila(r)}</span><small>${h(TIPO[r.tipo])}${resumoReg(r) ? ' · ' + h(resumoReg(r)) : ''}</small></span></button>
-        <button class="icon-btn dc-ed" data-editar="${h(r.id)}" aria-label="Editar ${h(tituloReg(r))}" title="Editar">${ic('editar', 19)}</button></div>`).join('')}</div>
-      <footer class="dc-acoes"><button class="btn btn-ghost btn-sm" data-pdf="${d}">${ic('pdf', 18)} Gerar PDF</button>
-        <button class="btn btn-ghost btn-sm" data-whats="${d}">${ic('whats', 18)} Copiar p/ WhatsApp</button></footer>
+      <div class="dc-lista">${g.regs.map((r) => itemReg(r, false)).join('')}</div>
+      <footer class="dc-acoes"><button class="btn btn-ghost btn-sm" data-pdf="${h(g.chave)}">${ic('pdf', 18)} Gerar PDF</button>
+        <button class="btn btn-ghost btn-sm" data-whats="${h(g.chave)}">${ic('whats', 18)} WhatsApp</button></footer>
     </article>`;
+  }
+  const itemReg = (r, comEquipe) => `<div class="dc-item">
+      <button class="dc-abrir" data-reg="${h(r.id)}"><span class="dc-ico t-${r.tipo}">${ic(ICONE[r.tipo], 18)}</span>
+        <span class="dc-txt"><span class="l-top"><b>${comEquipe ? h(equipeDe(r)) + ' · ' : ''}${h(tituloReg(r))}</b>${etiquetaFila(r)}</span><small>${h(resumoReg(r) || TIPO[r.tipo])}</small></span></button>
+      <span class="dc-bts">${r.tipo === 'apontamento' ? `<label class="icon-btn dc-bt" title="Adicionar foto da equipe"><span class="sr-only">Adicionar foto da equipe</span>${ic('camera', 19)}<input type="file" accept="image/*" class="sr-only" data-foto-eq="${h(r.id)}"></label>` : ''}
+        <button class="icon-btn dc-bt" data-editar="${h(r.id)}" aria-label="Editar" title="Editar">${ic('editar', 19)}</button>
+        <button class="icon-btn dc-bt del" data-excluir="${h(r.id)}" aria-label="Excluir" title="Excluir">${ic('lixo', 19)}</button></span>
+    </div>`;
+  function ligarCartoes(raiz) {
+    hidratarFotos(raiz);
+    $$('[data-reg]', raiz).forEach((b) => (b.onclick = () => detalhe(b.dataset.reg)));
+    $$('[data-editar]', raiz).forEach((b) => (b.onclick = () => editar(b.dataset.editar)));
+    $$('[data-excluir]', raiz).forEach((b) => (b.onclick = async () => { const x = registro(b.dataset.excluir); if (x && (await excluirRegistro(x))) render(true); }));
+    $$('[data-foto-eq]', raiz).forEach((i) => (i.onchange = (e) => { const a = e.target.files && e.target.files[0]; e.target.value = ''; if (a) fotoEquipeRapida(i.dataset.fotoEq, a); }));
+    $$('[data-ver]', raiz).forEach((b) => (b.onclick = () => verFoto(b.dataset.ver)));
+    $$('[data-pdf]', raiz).forEach((b) => (b.onclick = () => gerarPDF(b.dataset.pdf)));
+    $$('[data-whats]', raiz).forEach((b) => (b.onclick = () => compartilhar(b.dataset.whats)));
   }
   function editar(id) {
     const r = registro(id); if (!r) return;
     location.hash = `#/${r.tipo}?id=${encodeURIComponent(id)}`;
+  }
+  // Foto da equipe direto do cartão (sem abrir o apontamento)
+  async function fotoEquipeRapida(id, arq) {
+    const r = registro(id); if (!r) return;
+    try {
+      const blob = await reduzirFoto(arq); const path = `${S.user.id}/${uuid()}.jpg`;
+      await IDB.put(path, blob);
+      const dados = paraEnvio(r);
+      dados.fotos = [...(r.fotos || []).map((f) => ({ path: f.path, tipo: f.tipo })), { path, tipo: 'equipe' }];
+      dados.criado_em = r.criado_em || new Date().toISOString();
+      const anterior = fila().find((x) => x.dados.id === id);
+      salvarFila([...fila().filter((x) => x.dados.id !== id), { dados, remover: (anterior && anterior.remover) || [], criado: dados.criado_em }]);
+      barra(); render(true);
+      toast(navigator.onLine ? 'Foto da equipe adicionada.' : 'Foto guardada no aparelho; vai ser enviada quando houver internet.', 'in');
+      await enviarFila(true);
+      const it = fila().find((x) => x.dados.id === id);
+      if (it && it.erro) toast('A foto não foi salva: ' + it.erro, 'erro', 9000);
+    } catch (e) { toast(msgErro(e), 'erro'); }
+  }
+  async function excluirRegistro(x) {
+    if (!(await confirmar('Excluir este lançamento?', `${h(equipeDe(x))} · ${h(tituloReg(x))} de ${dataBR(x.data)}. Não dá para desfazer; as fotos dele também são apagadas.`, 'Excluir', true))) return false;
+    const noServidor = S.regs.some((y) => y.id === x.id);
+    if (noServidor && !navigator.onLine) { toast('Para excluir um lançamento já enviado é preciso internet.', 'erro'); return false; }
+    try {
+      if (noServidor) { await sessao(); await rpc('pgo_excluir_registro', { p_id: x.id }); }
+      const item = fila().find((y) => y.dados.id === x.id);
+      salvarFila(fila().filter((y) => y.dados.id !== x.id));
+      apagarArquivos([...(x.fotos || []).map((f) => f.path), ...((item && item.remover) || [])]);
+      S.regs = S.regs.filter((y) => y.id !== x.id); gravar('pgo.regs.' + S.user.id, S.regs);
+      barra(); toast('Lançamento excluído.');
+      return true;
+    } catch (e) { toast(msgErro(e), 'erro'); return false; }
+  }
+
+  // =========================================================
+  //   Meus registros (histórico com filtros)
+  // =========================================================
+  const PERIODOS = [['7', 'Últimos 7 dias'], ['30', 'Últimos 30 dias'], ['90', 'Últimos 90 dias'], ['365', 'Último ano'], ['tudo', 'Tudo']];
+  function vRegistros(view) {
+    const F = S.filtro; const dias = F.periodo === 'tudo' ? 36500 : Number(F.periodo);
+    if (dias > S.janela && navigator.onLine && !F.buscando) {
+      S.janela = dias; F.buscando = true;
+      carregarDados().finally(() => { F.buscando = false; if (rotaAtual() === 'registros') render(true); });
+    }
+    const desde = diasAtras(dias - 1); const q = semAcento(F.busca).trim();
+    const todas = visao();
+    const lista = todas.filter((r) => dia10(r.data) >= desde && (!F.equipe || equipeDe(r) === F.equipe) && (!F.tipo || r.tipo === F.tipo)
+      && (!q || q.split(/\s+/).every((t) => semAcento(textoBusca(r)).includes(t))));
+    const eqs = [...new Set(todas.map(equipeDe))].sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+    let com = 0, comM = 0, ha = 0, meta = 0, nMeta = 0;
+    grupos(lista).forEach((g) => { const m = metaGrupo(g.regs); const c = calcular(g.regs, m); com += c.com; ha += c.ha; if (m != null) { meta += m; comM += c.com; nMeta++; } });
+    const dl = nMeta ? comM - meta : null;
+    const porDia = [...new Set(lista.map((r) => dia10(r.data)))];
+    const ABAS = [['', 'Todos'], ['apontamento', 'Apontamentos'], ['diarias', 'Diárias'], ['paradas', 'Horas paradas']];
+    view.innerHTML = cabecalho('Meus registros', 'Tudo o que você lançou. Toque para ver; use o lápis para editar e a lixeira para excluir.') + `
+      <div class="tools"><div class="search">${ic('search', 20)}<input type="search" class="input" id="rq" placeholder="Pesquisar atividade, fazenda, UP, motivo…" value="${h(F.busca)}" aria-label="Pesquisar"></div></div>
+      <div class="tools"><select class="input" id="rp" aria-label="Período">${PERIODOS.map(([k, t]) => `<option value="${k}" ${F.periodo === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <select class="input" id="re" aria-label="Equipe"><option value="">Todas as equipes</option>${eqs.map((e) => `<option ${F.equipe === e ? 'selected' : ''}>${h(e)}</option>`).join('')}</select></div>
+      <div class="filtros" role="group" aria-label="Tipo">${ABAS.map(([k, t]) => `<button class="chip" data-tipo="${k}" aria-pressed="${F.tipo === k}">${t}</button>`).join('')}</div>
+      <section class="resumo-reg" aria-label="Resumo do período">
+        <div><span>Lançamentos</span><b>${lista.length}</b></div>
+        <div><span>Produção</span><b>${num(ha)} ha</b></div>
+        <div><span>Faturamento c/ diárias</span><b>${brl(com)}</b></div>
+        <div><span>Meta</span><b>${nMeta ? brl(meta) : '—'}</b></div>
+        <div class="${dl == null ? '' : dl >= 0 ? 'pos' : 'neg'}"><span>Δ da meta</span><b>${dl == null ? '—' : sinal(dl)}</b></div>
+      </section>
+      ${F.buscando ? '<p class="muted small">Buscando lançamentos mais antigos…</p>' : ''}
+      <div id="rl">${porDia.length ? porDia.map((d) => `<section class="dia"><h3 class="dia-tit">${dataBR(d)} <span>${diaSemana(d)}</span></h3>
+        <div class="dc-lista solta">${lista.filter((r) => dia10(r.data) === d).map((r) => itemReg(r, true)).join('')}</div></section>`).join('')
+        : `<div class="empty"><strong>Nada por aqui</strong>${q || F.equipe || F.tipo ? 'Nenhum lançamento com esses filtros.' : 'Nenhum lançamento neste período.'}</div>`}</div>`;
+    ligarCartoes(view);
+    $('#rp', view).onchange = (e) => { F.periodo = e.target.value; render(true); };
+    $('#re', view).onchange = (e) => { F.equipe = e.target.value; render(true); };
+    $$('[data-tipo]', view).forEach((b) => (b.onclick = () => { F.tipo = b.dataset.tipo; render(true); }));
+    $('#rq', view).oninput = (e) => { F.busca = e.target.value; clearTimeout(vRegistros.t); vRegistros.t = setTimeout(() => { render(true); const i = $('#rq'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 350); };
   }
 
   // Detalhe de um lançamento
@@ -546,36 +662,24 @@
     const estr = x.tipo !== 'apontamento' ? '' : (x.equipe_tipo === 'Mecanizado'
       ? [['trator_medio', 'trator médio'], ['trator_pesado', 'trator pesado'], ['caminhao', 'caminhão'], ['drone', 'drone']].filter(([k]) => x[k]).map(([k, t]) => `${x[k]} ${t}`).join(' · ')
       : (x.colaboradores ? `${x.colaboradores} colaboradores · ${Math.max(0, x.colaboradores - (x.faltas || 0) - (x.ferias || 0))} presentes${x.faltas ? ` · ${x.faltas} falta(s)` : ''}${x.ferias ? ` · ${x.ferias} férias` : ''}` : ''));
-    const atvs = c.atv.map((a) => `<li><b>${h(a.atividade)}</b><br>${h(a.fazenda)} · UP ${h(a.up)} · <b>${num(a.q)} ${a.un}</b>${a.tarifa != null ? ` · ${brl(a.tarifa)}/${a.un} = <b>${brl(a.valor)}</b>` : ''}
+    const atvs = c.atv.map((a) => `<li><b>${h(a.atividade)}</b>${a.situacao ? ` <span class="sit ${a.situacao === 'Finalizado' ? 'fin' : ''}">${h(a.situacao)}</span>` : ''}<br>${h(a.fazenda)} · UP ${h(a.up)} · <b>${num(a.q)} ${a.un}</b>${a.tarifa != null ? ` · ${brl(a.tarifa)}/${a.un} = <b>${brl(a.valor)}</b>` : ''}
       ${(a.insumos || []).length ? `<br><small>Insumos: ${a.insumos.map((i) => `${h(i.insumo)} ${num(i.quantidade, 3)}`).join(' · ')}</small>` : ''}</li>`).join('');
     const dias = c.dia.map((d) => `<li><b>${h(d.recurso)}${d.qt > 1 ? ' × ' + d.qt : ''}</b> · ${h(d.diaria)}<br>${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)} · ${duracao(d.ml)}${d.ml !== d.mb ? ' (desc. almoço)' : ''} · ${h(d.fazenda)} UP ${h(d.up)}${d.valor != null ? ` · <b>${brl(d.valor)}</b>` : ''}</li>`).join('');
     const pars = c.par.map((p) => `<li><b>${h(p.recurso)}${p.qt > 1 ? ' × ' + p.qt : ''}</b> · ${h(p.motivo)}<br>${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)} · ${duracao(p.mb)} · ${h(p.fazenda)} UP ${h(p.up)}</li>`).join('');
     const fotos = (x.fotos || []);
     const d = dialogo(`<div class="dlg"><div class="dlg-head"><h2>${h(TIPO[x.tipo])} · ${dataBR(x.data)}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
       ${x._erro ? `<div class="alert alert-erro">O servidor recusou este lançamento: ${h(x._erro)}<br>Toque em Editar para corrigir.</div>` : x._fila ? '<div class="alert alert-warn">Ainda não foi enviado: será enviado quando houver internet.</div>' : ''}
-      <dl class="det">${linha('Equipe', x.equipe ? h(x.equipe) + (x.equipe_tipo ? ` <small>(${h(x.equipe_tipo)})</small>` : '') : '')}${linha('Estrutura', h(estr))}
+      <dl class="det">${linha('Equipe', h(equipeDe(x)) + (x.equipe_tipo ? ` <small>(${h(x.equipe_tipo)})</small>` : ''))}${linha('Estrutura', h(estr))}
         ${linha('Atividades', atvs ? `<ul class="det-l">${atvs}</ul>` : '')}${linha('Diárias', dias ? `<ul class="det-l">${dias}</ul>` : '')}
         ${linha('Horas paradas', pars ? `<ul class="det-l">${pars}</ul>` : '')}${linha('Observação', h(x.observacao))}
         ${linha('Fotos', fotos.length ? `<div class="fotos mini">${fotos.map((f) => `<button class="foto" data-ver="${h(f.path)}" title="${f.tipo === 'equipe' ? 'Foto da equipe' : 'Foto da observação'}"><img alt="" data-path="${h(f.path)}"><span>${f.tipo === 'equipe' ? 'Equipe' : 'Obs.'}</span></button>`).join('')}</div>` : '')}</dl>
-      <div class="dlg-foot"><button class="btn btn-ghost btn-perigo-txt" data-del>${ic('lixo', 18)} ${x._fila && !S.regs.some((y) => y.id === x.id) ? 'Descartar' : 'Excluir'}</button>
+      <div class="dlg-foot"><button class="btn btn-ghost btn-perigo-txt" data-del>${ic('lixo', 18)} Excluir</button>
         <button class="btn" data-ed>${ic('editar', 18)} Editar</button></div></div>`);
     hidratarFotos(d);
     $('[data-x]', d).onclick = () => d.close();
     $$('[data-ver]', d).forEach((b) => (b.onclick = () => verFoto(b.dataset.ver)));
     $('[data-ed]', d).onclick = () => { d.close(); editar(x.id); };
-    $('[data-del]', d).onclick = async () => {
-      if (!(await confirmar('Excluir este lançamento?', 'Não dá para desfazer. As fotos dele também são apagadas.', 'Excluir', true))) return;
-      const noServidor = S.regs.some((y) => y.id === x.id);
-      if (noServidor && !navigator.onLine) return toast('Para excluir um lançamento já enviado é preciso internet.', 'erro');
-      try {
-        if (noServidor) { await sessao(); await rpc('pgo_excluir_registro', { p_id: x.id }); }
-        const item = fila().find((y) => y.dados.id === x.id);
-        salvarFila(fila().filter((y) => y.dados.id !== x.id));
-        apagarArquivos([...(x.fotos || []).map((f) => f.path), ...((item && item.remover) || [])]);
-        if (noServidor) await carregarDados(); else S.regs = S.regs.filter((y) => y.id !== x.id);
-        d.close(); barra(); toast('Lançamento excluído.'); render(true);
-      } catch (e) { toast(msgErro(e), 'erro'); }
-    };
+    $('[data-del]', d).onclick = async () => { if (await excluirRegistro(x)) { d.close(); render(true); } };
   }
 
   // =========================================================
@@ -694,12 +798,19 @@
         ? `<div class="item aberto"><div class="item-head"><b>${h(cfg.rotulo)} ${i + 1}</b><span class="item-acoes">
              <button type="button" class="btn btn-ghost btn-sm" data-ok>${ic('baixo', 16)} Recolher</button>
              <button type="button" class="icon-btn" data-rm aria-label="Remover ${h(cfg.rotulo.toLowerCase())} ${i + 1}">${ic('lixo', 18)}</button></span></div>${cfg.corpo(x, i)}</div>`
-        : `<button type="button" class="item-mini ${cfg.completo(x) ? '' : 'inc'}" data-abrir="${i}" aria-label="Abrir ${h(cfg.rotulo.toLowerCase())} ${i + 1}"><span class="n">${i + 1}</span>
-             <span class="t">${cfg.resumo(x)}${cfg.completo(x) ? '' : '<em>Incompleto</em>'}</span>${ic('editar', 17)}</button>`)).join('')
+        : `<div class="mini-w"><button type="button" class="item-mini ${cfg.completo(x) ? '' : 'inc'}" data-abrir="${i}" aria-label="Editar ${h(cfg.rotulo.toLowerCase())} ${i + 1}"><span class="n">${i + 1}</span>
+             <span class="t">${cfg.resumo(x)}${cfg.completo(x) ? '' : '<em>Incompleto</em>'}</span><span class="mini-ed">${ic('editar', 17)}<span>Editar</span></span></button>
+             <button type="button" class="icon-btn mini-rm" data-rm-i="${i}" aria-label="Excluir ${h(cfg.rotulo.toLowerCase())} ${i + 1}" title="Excluir">${ic('lixo', 18)}</button></div>`)).join('')
         : `<p class="muted small">${cfg.vazio}</p>`) + `<button type="button" class="btn btn-ghost btn-add" data-add>${ic('plus', 18)} ${h(cfg.textoAdd(it.length))}</button>`;
       if (st.aberto >= 0 && it[st.aberto]) cfg.ligar(it[st.aberto], st.aberto, box);
       $$('[data-abrir]', box).forEach((b) => (b.onclick = () => { st.aberto = +b.dataset.abrir; desenhar(); rolar(); }));
       const ok = $('[data-ok]', box); if (ok) ok.onclick = () => { st.aberto = -1; desenhar(); };
+      $$('[data-rm-i]', box).forEach((b) => (b.onclick = async () => {
+        const k = +b.dataset.rmI; const x = it[k];
+        if (cfg.resumoTexto(x) && !(await confirmar(`Excluir ${cfg.rotulo.toLowerCase()} ${k + 1}?`, h(cfg.resumoTexto(x)), 'Excluir', true))) return;
+        it.splice(k, 1); if (st.aberto === k) st.aberto = -1; else if (st.aberto > k) st.aberto--;
+        desenhar(); cfg.mudou && cfg.mudou();
+      }));
       const rm = $('[data-rm]', box);
       if (rm) rm.onclick = async () => {
         const x = it[st.aberto];
@@ -713,10 +824,11 @@
   }
 
   // ----- Atividade -----
-  const novaAtividade = (fz) => ({ atividade: '', regime: '', tarifa: null, fazenda: fz || '', up: '', hectares: '', insumos: [] });
-  const atvCompleta = (a) => !!(a.atividade && a.fazenda && a.up && lerNum(a.hectares) > 0 && (a.insumos || []).every((i) => i.insumo && lerNum(i.quantidade) > 0));
+  const novaAtividade = (fz) => ({ atividade: '', regime: '', tarifa: null, fazenda: fz || '', up: '', hectares: '', situacao: '', insumos: [] });
+  const SITUACOES = ['Em andamento', 'Finalizado'];
+  const atvCompleta = (a) => !!(a.atividade && a.fazenda && a.up && lerNum(a.hectares) > 0 && a.situacao && (a.insumos || []).every((i) => i.insumo && lerNum(i.quantidade) > 0));
   const atvResumoTxt = (a) => [a.atividade, a.fazenda && `${a.fazenda}${a.up ? ' UP ' + a.up : ''}`, lerNum(a.hectares) > 0 && `${num(lerNum(a.hectares))} ${unidade(a.atividade)}`].filter(Boolean).join(' · ');
-  const atvResumo = (a) => `<b>${h(a.atividade || 'Atividade sem nome')}</b><small>${h([a.fazenda && `${a.fazenda}${a.up ? ' · UP ' + a.up : ''}`, lerNum(a.hectares) > 0 && `${num(lerNum(a.hectares))} ${unidade(a.atividade)}`, (a.insumos || []).length && plural(a.insumos.length, 'insumo', 'insumos')].filter(Boolean).join(' · ') || 'Toque para preencher')}</small>`;
+  const atvResumo = (a) => `<b>${h(a.atividade || 'Atividade sem nome')}</b><small>${h([a.fazenda && `${a.fazenda}${a.up ? ' · UP ' + a.up : ''}`, lerNum(a.hectares) > 0 && `${num(lerNum(a.hectares))} ${unidade(a.atividade)}`, a.situacao, (a.insumos || []).length && plural(a.insumos.length, 'insumo', 'insumos')].filter(Boolean).join(' · ') || 'Toque para preencher')}</small>`;
   function atvCorpo(a, i) {
     const un = unidade(a.atividade); const ref = a.atividade ? atividadeDe(a.atividade) : null; const tar = a.tarifa != null ? a.tarifa : ref && ref.tarifa;
     return `${campoEscolha(`at${i}-atv`, 'Atividade', a.atividade, atividades().length ? 'Escolher atividade' : 'Planilha de atividades vazia', a.atividade ? [a.regime, tar != null ? brl(tar) + '/' + un : 'sem tarifa'].filter(Boolean).join(' · ') : '')}
@@ -724,6 +836,8 @@
       <div class="field campo-ha"><label for="at${i}-ha">${un === 'h' ? 'Horas realizadas' : 'Hectares realizados'}</label>
         <div class="com-unid"><input id="at${i}-ha" class="input" inputmode="decimal" value="${h(numCampo(lerNum(a.hectares)))}" placeholder="0"><span>${un}</span></div>
         ${a.fazenda && a.up && areaDe(a.fazenda, a.up) != null ? `<span class="hint">Área do talhão: ${num(areaDe(a.fazenda, a.up))} ha</span>` : ''}</div>
+      <div class="field"><span class="label" id="at${i}-sit-l">Situação do talhão</span>
+        <div class="seg seg-2" role="group" aria-labelledby="at${i}-sit-l" id="at${i}-sit">${SITUACOES.map((x) => `<button type="button" data-sit="${x}" aria-pressed="${a.situacao === x}">${x}</button>`).join('')}</div></div>
       <div class="sub-ins"><div class="sec-head"><span class="label">Insumos desta atividade</span><button type="button" class="btn btn-ghost btn-sm" id="at${i}-add-in">${ic('plus', 18)} Insumo</button></div>
         <div id="at${i}-ins" class="itens"></div></div>`;
   }
@@ -734,6 +848,7 @@
     };
     ligarLocal(box, `at${i}`, a, () => { ctx.mudou(); ctx.redesenhar(); });
     $(`#at${i}-ha`, box).oninput = (e) => { a.hectares = e.target.value; };
+    $$(`#at${i}-sit [data-sit]`, box).forEach((b) => (b.onclick = () => { a.situacao = b.dataset.sit; $$(`#at${i}-sit [data-sit]`, box).forEach((x) => x.setAttribute('aria-pressed', String(x === b))); ctx.mudou(); }));
     const lista = insumos();
     const desenharIns = () => {
       const el = $(`#at${i}-ins`, box);
@@ -797,6 +912,7 @@
       if (!a.fazenda) return ir('escolha a fazenda.', 'fz');
       if (!a.up) return ir('escolha o talhão (UP).', 'up');
       const q = lerNum(a.hectares); if (!(q > 0)) return ir(`informe ${unidade(a.atividade) === 'h' ? 'as horas realizadas' : 'os hectares realizados'} (maior que zero).`, 'ha');
+      if (!a.situacao) return ir('informe se o talhão está em andamento ou finalizado.', 'sit button');
       for (let k = 0; k < a.insumos.length; k++) {
         const x = a.insumos[k];
         if (!x.insumo) return ir(`escolha o insumo ${k + 1}.`, `in${k}-n`);
@@ -817,7 +933,7 @@
     }
     return true;
   }
-  const limparAtv = (a) => ({ atividade: a.atividade, regime: a.regime || null, tarifa: a.tarifa, fazenda: a.fazenda, up: a.up, area_ha: areaDe(a.fazenda, a.up), hectares: lerNum(a.hectares), insumos: a.insumos.map((x) => ({ insumo: x.insumo, quantidade: lerNum(x.quantidade) })) });
+  const limparAtv = (a) => ({ atividade: a.atividade, regime: a.regime || null, tarifa: a.tarifa, fazenda: a.fazenda, up: a.up, area_ha: areaDe(a.fazenda, a.up), hectares: lerNum(a.hectares), situacao: a.situacao || null, insumos: a.insumos.map((x) => ({ insumo: x.insumo, quantidade: lerNum(x.quantidade) })) });
   const limparDia = (d) => ({ recurso: d.recurso, quantidade: parseInt(d.quantidade, 10) || 1, fazenda: d.fazenda, up: d.up, diaria: String(d.diaria).trim(), hora_inicio: hhmm(d.hora_inicio), hora_fim: hhmm(d.hora_fim) });
   const limparPar = (p) => ({ recurso: p.recurso, quantidade: parseInt(p.quantidade, 10) || 1, fazenda: p.fazenda, up: p.up, motivo: p.motivo, hora_inicio: hhmm(p.hora_inicio), hora_fim: hhmm(p.hora_fim) });
 
@@ -847,6 +963,22 @@
       location.hash = '#/home';
     } catch (e) { bt.disabled = false; bt.innerHTML = txt; err.textContent = msgErro(e); }
   }
+  // meta gravada no lançamento: a do dia em que foi lançado; se trocar a equipe, a da equipe nova
+  const metaParaSalvar = (F) => (F.original && F.original.equipe === F.equipe && Number(F.original.meta) > 0 ? Number(F.original.meta) : metaEquipe(F.equipe));
+  // Campo de equipe (apontamento, diárias e paradas)
+  function ligarEquipe(view, F, aoMudar) {
+    const box = () => {
+      const e = equipes().find((x) => x.equipe === F.equipe);
+      $('#f-eq-box', view).innerHTML = campoEscolha('f-eq', 'Equipe', F.equipe, equipes().length ? 'Escolher equipe' : 'Sem equipes para o seu CDC',
+        [e ? e.tipo : F.equipe_tipo, e && e.meta ? 'meta ' + brl(e.meta) : ''].filter(Boolean).join(' · '));
+      $('#f-eq', view).onclick = async () => {
+        const v = await escolher('Equipe', equipes().map((x) => ({ v: x.equipe, t: x.equipe, sub: [x.tipo, x.meta ? 'meta ' + brl(x.meta) : ''].filter(Boolean).join(' · ') })), F.equipe);
+        if (v != null) { const x = equipes().find((q) => q.equipe === v); const antes = F.equipe_tipo; F.equipe = v; F.equipe_tipo = x ? x.tipo : ''; box(); aoMudar && aoMudar(antes !== F.equipe_tipo); }
+      };
+    };
+    box();
+  }
+
   // Estado inicial do formulário (novo ou edição)
   function estadoForm(tipo) {
     const id = paramRota('id'); const orig = id ? registro(id) : null;
@@ -898,9 +1030,9 @@
 
     const eqBox = () => {
       const e = equipes().find((x) => x.equipe === F.equipe);
-      $('#ap-eq-box', view).innerHTML = campoEscolha('ap-eq', 'Equipe', F.equipe, equipes().length ? 'Escolher equipe' : 'Sem equipes para o seu CDC', e ? e.tipo : F.equipe_tipo);
+      $('#ap-eq-box', view).innerHTML = campoEscolha('ap-eq', 'Equipe', F.equipe, equipes().length ? 'Escolher equipe' : 'Sem equipes para o seu CDC', [e ? e.tipo : F.equipe_tipo, e && e.meta ? 'meta ' + brl(e.meta) : ''].filter(Boolean).join(' · '));
       $('#ap-eq', view).onclick = async () => {
-        const v = await escolher('Equipe', equipes().map((x) => ({ v: x.equipe, t: x.equipe, sub: x.tipo })), F.equipe);
+        const v = await escolher('Equipe', equipes().map((x) => ({ v: x.equipe, t: x.equipe, sub: [x.tipo, x.meta ? 'meta ' + brl(x.meta) : ''].filter(Boolean).join(' · ') })), F.equipe);
         if (v != null) { const x = equipes().find((q) => q.equipe === v); const tipoAntes = F.equipe_tipo; F.equipe = v; F.equipe_tipo = x ? x.tipo : ''; eqBox(); if (tipoAntes !== F.equipe_tipo || !$('#ap-estr .contador', view)) estrutura(); sujo(); }
       };
     };
@@ -945,7 +1077,7 @@
       if (!data) return falha('Informe a data.', $('#f-data', view));
       if (data > hoje()) return falha('A data não pode ser no futuro.', $('#f-data', view));
       if (!F.equipe) return falha('Escolha a equipe.', $('#ap-eq', view));
-      const dados = { id: F.id, tipo: 'apontamento', data, equipe: F.equipe, equipe_tipo: F.equipe_tipo || null };
+      const dados = { id: F.id, tipo: 'apontamento', data, equipe: F.equipe, equipe_tipo: F.equipe_tipo || null, meta: metaParaSalvar(F) };
       const campos = F.equipe_tipo === 'Mecanizado' ? [['trator_medio', 'ap-tm', 'Trator médio'], ['trator_pesado', 'ap-tp', 'Trator pesado'], ['caminhao', 'ap-cam', 'Caminhão'], ['drone', 'ap-dro', 'Drone']]
         : [['colaboradores', 'ap-col', 'Colaboradores'], ['faltas', 'ap-fal', 'Faltas'], ['ferias', 'ap-fer', 'Férias']];
       for (const [k, id, rot] of campos) { const v = intDe(view, id); if (Number.isNaN(v)) return falha(`${rot}: use um número inteiro.`, $('#' + id, view)); dados[k] = v; }
@@ -976,7 +1108,8 @@
     view.innerHTML = cabecalho((ed ? 'Editar ' : '') + (dia ? 'diárias' : 'horas paradas').replace(/^./, (c) => (ed ? c : c.toUpperCase())),
       dia ? 'Serviços feitos por diária. Adicione quantas precisar.' : 'Tempo em que a equipe ou as máquinas ficaram paradas.') + `
       <form id="f-it" class="stack" novalidate>
-        <section class="panel"><div class="field" style="max-width:260px"><label for="f-data">Data</label><input id="f-data" type="date" class="input" value="${F.data}" max="${hoje()}"></div></section>
+        <section class="panel"><div class="grid-2 stack-sm"><div class="field"><label for="f-data">Data</label><input id="f-data" type="date" class="input" value="${F.data}" max="${hoje()}"></div>
+          <div id="f-eq-box"></div></div></section>
         <section class="panel"><h2>${dia ? 'Diárias' : 'Horas paradas'}</h2><div id="it-lista" class="itens"></div></section>
         ${rodapeForm(F, ed ? 'Salvar alterações' : dia ? 'Salvar diárias' : 'Salvar horas paradas')}
       </form>`;
@@ -984,6 +1117,7 @@
     const sujo = () => { form.dataset.sujo = '1'; $('.form-error', form).textContent = ''; };
     form.addEventListener('input', sujo);
     ligarFotos(view, 'f-fobs', F.fotos, 'obs', sujo);
+    ligarEquipe(view, F, sujo);
     const ctx = { mudou: sujo };
     const L = listaItens(view, '#it-lista', dia
       ? { itens: lista, aberto: ed ? -1 : 0, rotulo: 'Diária', vazio: 'Nenhuma diária.', textoAdd: (n) => (n ? 'Adicionar outra diária' : 'Adicionar diária'),
@@ -998,9 +1132,10 @@
       const data = $('#f-data', view).value;
       if (!data) return falha('Informe a data.', $('#f-data', view));
       if (data > hoje()) return falha('A data não pode ser no futuro.', $('#f-data', view));
+      if (!F.equipe) return falha('Escolha a equipe.', $('#f-eq', view));
       if (!lista.length) return falha(dia ? 'Adicione pelo menos uma diária.' : 'Adicione pelo menos uma hora parada.');
       if (!validarItens(F, falha)) return;
-      const dados = { id: F.id, tipo, data, diarias: dia ? lista.map(limparDia) : [], paradas: dia ? [] : lista.map(limparPar), observacao: $('#f-obs', view).value.trim() || null };
+      const dados = { id: F.id, tipo, data, equipe: F.equipe, equipe_tipo: F.equipe_tipo || null, meta: metaParaSalvar(F), diarias: dia ? lista.map(limparDia) : [], paradas: dia ? [] : lista.map(limparPar), observacao: $('#f-obs', view).value.trim() || null };
       guardar(form, F, dados, ed ? 'Lançamento atualizado.' : dia ? 'Diárias salvas.' : 'Horas paradas salvas.');
     };
   }
@@ -1011,13 +1146,9 @@
   function vValores(view) {
     const fmt = (v) => (v == null || v === '' ? '' : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 }));
     const desenhar = () => {
-      view.innerHTML = cabecalho('Valores', `Usados no faturamento do cartão do dia e no PDF. CDC: <b>${h(S.user.cdc)}</b>`) + `
+      view.innerHTML = cabecalho('Valores', `Usados no faturamento dos cartões e no PDF. CDC: <b>${h(S.user.cdc)}</b>`) + `
         <form id="f-val" class="panel stack-sm" novalidate>
-          <h2>Meta de faturamento</h2>
-          <div class="field"><label for="vmeta">Meta por dia</label>
-            <div class="com-unid moeda"><span>R$</span><input id="vmeta" class="input" inputmode="decimal" value="${h(fmt(S.valores._meta && S.valores._meta.valor))}" placeholder="0,00"><span>/dia</span></div>
-            <span class="hint">Sua meta diária. O cartão do dia e o PDF mostram o delta: faturamento − meta, com e sem as diárias.</span></div>
-          <h2 class="mt">Diárias · valor por hora</h2>
+          <h2>Diárias · valor por hora</h2>
           <p class="muted small">Faturamento da diária = valor/hora × horas trabalhadas × quantidade. Se o horário pegar das 11h às 12h, essa hora de almoço é descontada. Os valores valem para todos do seu CDC.</p>
           ${RECURSOS.map((r, i) => { const v = S.valores[r]; return `<div class="field"><label for="v${i}">${h(r)}</label>
             <div class="com-unid moeda"><span>R$</span><input id="v${i}" class="input" inputmode="decimal" value="${h(fmt(v && v.valor))}" placeholder="0,00"><span>/hora</span></div>
@@ -1025,6 +1156,10 @@
           <p class="form-error" role="alert"></p>
           <button class="btn btn-block btn-salvar" type="submit">Salvar valores</button>
         </form>
+        <section class="panel"><div class="sec-head"><h2>Metas das equipes</h2><span class="muted small">da planilha de equipes</span></div>
+          <p class="muted small">A meta de cada equipe vem da coluna METAS. O cartão da equipe e o PDF mostram o delta: faturamento − meta, com e sem as diárias.</p>
+          <div class="tarifas">${equipes().map((e) => `<div class="tar"><span><b>${h(e.equipe)}</b><small>${h(e.tipo)}</small></span><b>${e.meta ? brl(e.meta) : '—'}</b></div>`).join('') || '<p class="muted">Não consegui ler a planilha de equipes.</p>'}</div>
+        </section>
         <section class="panel"><div class="sec-head"><h2>Tarifas das atividades</h2><span class="muted small">da planilha · ${atividades().length} atividades</span></div>
           <p class="muted small">Faturamento da atividade = tarifa × quantidade realizada. Para mudar uma tarifa, altere a planilha de atividades.</p>
           <div class="search">${ic('search', 20)}<input type="search" class="input" id="tq" placeholder="Pesquisar atividade" aria-label="Pesquisar atividade"></div>
@@ -1041,9 +1176,6 @@
           if (t && !(n >= 0)) { err.textContent = `${RECURSOS[i]}: valor inválido.`; $('#v' + i, view).focus(); return; }
           p[RECURSOS[i]] = t ? n : null;
         }
-        const tm = $('#vmeta', view).value.trim(), nm = lerNum(tm);
-        if (tm && !(nm >= 0)) { err.textContent = 'Meta: valor inválido.'; $('#vmeta', view).focus(); return; }
-        p._meta = tm ? nm : null;
         if (!navigator.onLine) { err.textContent = 'Para salvar os valores é preciso internet.'; return; }
         const bt = $('.btn-salvar', form); bt.disabled = true; bt.textContent = 'Salvando…';
         try { await sessao(); S.valores = (await rpc('pgo_salvar_valores', { p })) || {}; gravar('pgo.valores.' + S.user.cdc, S.valores); delete form.dataset.sujo; toast('Valores salvos.', 'in'); location.hash = '#/home'; }
@@ -1056,114 +1188,149 @@
   }
 
   // =========================================================
-  //   WhatsApp (sem valores em dinheiro)
+  //   WhatsApp (sem valores em dinheiro) — vai com a foto da equipe
   // =========================================================
-  function textoWhats(d) {
-    const regs = deDia(d); const c = calcular(regs); const L = [];
-    L.push(`*PGO Digital · ${dataBR(d)} (${diaSemana(d)})*`, `${S.user.nome} · ${S.user.cdc}`);
-    for (const r of regs) {
-      const cr = calcular([r]); L.push('');
-      if (r.tipo === 'apontamento') {
-        L.push(`👷 *${r.equipe}*${r.equipe_tipo ? ` (${r.equipe_tipo})` : ''}`);
-        const est = r.equipe_tipo === 'Mecanizado'
-          ? [['trator_medio', 'trator médio'], ['trator_pesado', 'trator pesado'], ['caminhao', 'caminhão'], ['drone', 'drone']].filter(([k]) => r[k]).map(([k, t]) => `${r[k]} ${t}`).join(' · ')
-          : (r.colaboradores ? `${r.colaboradores} colaboradores · ${Math.max(0, r.colaboradores - (r.faltas || 0) - (r.ferias || 0))} presentes${r.faltas ? ` · ${r.faltas} falta(s)` : ''}${r.ferias ? ` · ${r.ferias} férias` : ''}` : '');
-        if (est) L.push(`Estrutura: ${est}`);
-      } else L.push(r.tipo === 'diarias' ? '🕒 *Diárias*' : '⛔ *Horas paradas*');
-      if (cr.atv.length) {
-        L.push('✅ Atividades:');
-        cr.atv.forEach((a) => { L.push(`• ${a.atividade} — ${a.fazenda} UP ${a.up} — *${num(a.q)} ${a.un}*`); if ((a.insumos || []).length) L.push(`   Insumos: ${a.insumos.map((i) => `${i.insumo} ${num(i.quantidade, 3)}`).join(', ')}`); });
-      }
-      if (cr.dia.length) {
-        if (r.tipo === 'apontamento') L.push('🕒 Diárias:');
-        cr.dia.forEach((x) => L.push(`• ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''} — ${x.diaria} — ${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} (${duracao(x.ml)}${x.ml !== x.mb ? ', já descontado o almoço' : ''}) — ${x.fazenda} UP ${x.up}`));
-      }
-      if (cr.par.length) {
-        if (r.tipo === 'apontamento') L.push('⛔ Horas paradas:');
-        cr.par.forEach((x) => L.push(`• ${x.motivo} — ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''} — ${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} (${duracao(x.mb)}) — ${x.fazenda} UP ${x.up}`));
-      }
-      if (r.observacao) L.push(`📝 ${r.observacao}`);
+  function estruturaTxt(r) {
+    return r.equipe_tipo === 'Mecanizado'
+      ? [['trator_medio', 'trator médio'], ['trator_pesado', 'trator pesado'], ['caminhao', 'caminhão'], ['drone', 'drone']].filter(([k]) => r[k]).map(([k, t]) => `${r[k]} ${t}`).join(' · ')
+      : (r.colaboradores ? `${r.colaboradores} colaboradores · ${Math.max(0, r.colaboradores - (r.faltas || 0) - (r.ferias || 0))} presentes${r.faltas ? ` · ${r.faltas} falta(s)` : ''}${r.ferias ? ` · ${r.ferias} férias` : ''}` : '');
+  }
+  function textoWhats(g) {
+    const c = calcular(g.regs); const L = []; const tp = tipoEquipe(g);
+    L.push(`*PGO Digital · ${g.equipe}*${tp ? ` (${tp})` : ''}`, `${dataBR(g.d)} (${diaSemana(g.d)}) · ${S.user.nome}`);
+    c.equipes.map(estruturaTxt).filter(Boolean).forEach((e) => L.push(`👷 Estrutura: ${e}`));
+    if (c.atv.length) {
+      L.push('', '✅ *Atividades*');
+      c.atv.forEach((a) => {
+        L.push(`• ${a.atividade} — ${a.fazenda} UP ${a.up} — *${num(a.q)} ${a.un}*${a.situacao ? ` — ${a.situacao === 'Finalizado' ? 'talhão finalizado' : 'em andamento'}` : ''}`);
+        if ((a.insumos || []).length) L.push(`   Insumos: ${a.insumos.map((i) => `${i.insumo} ${num(i.quantidade, 3)}`).join(', ')}`);
+      });
     }
+    if (c.dia.length) {
+      L.push('', '🕒 *Diárias*');
+      c.dia.forEach((x) => L.push(`• ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''} — ${x.diaria} — ${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} (${duracao(x.ml)}${x.ml !== x.mb ? ', já descontado o almoço' : ''}) — ${x.fazenda} UP ${x.up}`));
+    }
+    if (c.par.length) {
+      L.push('', '⛔ *Horas paradas*');
+      c.par.forEach((x) => L.push(`• ${x.motivo} — ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''} — ${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} (${duracao(x.mb)}) — ${x.fazenda} UP ${x.up}`));
+    }
+    g.regs.filter((r) => r.observacao).forEach((r, i) => { if (!i) L.push(''); L.push(`📝 ${r.observacao}`); });
     const tot = [c.ha ? `${num(c.ha)} ha` : '', c.hAtv ? `${num(c.hAtv)} h de atividade` : '', c.dia.length ? `${horasTxt(c.hDia)} de diárias` : '', c.par.length ? `${horasTxt(c.hPar)} paradas` : ''].filter(Boolean);
-    if (tot.length) L.push('', `*Total do dia:* ${tot.join(' · ')}`);
+    if (tot.length) L.push('', `*Total:* ${tot.join(' · ')}`);
     return L.join('\n');
   }
   async function copiarTexto(t) {
     try { await navigator.clipboard.writeText(t); return true; }
     catch (_) { const a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', ''); a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (_) {} a.remove(); return ok; }
   }
-  function compartilhar(d) {
-    const t = textoWhats(d);
-    const dl = dialogo(`<div class="dlg"><div class="dlg-head"><h2>WhatsApp · ${dataBR(d)}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
-      <p class="muted small">Texto sem valores em dinheiro, pronto para o grupo.</p>
-      <textarea class="input whats-txt" readonly rows="12" aria-label="Texto para o WhatsApp">${h(t)}</textarea>
-      <div class="dlg-foot"><button class="btn btn-ghost" data-copiar>${ic('copiar', 18)} Copiar</button>
-        <a class="btn btn-whats" href="https://wa.me/?text=${encodeURIComponent(t)}" target="_blank" rel="noopener">${ic('whats', 18)} Abrir no WhatsApp</a></div></div>`);
+  async function arquivosDasFotos(fotos, nome) {
+    const out = [];
+    for (const f of fotos) {
+      try {
+        let b = await IDB.get(f.path);
+        if (!b) { const r = await fetch(urlFoto(f.path)); if (r.ok) b = await r.blob(); }
+        if (b) out.push(new File([b], `${nome}${fotos.length > 1 ? '-' + (out.length + 1) : ''}.jpg`, { type: 'image/jpeg' }));
+      } catch (_) {}
+    }
+    return out;
+  }
+  function compartilhar(chave) {
+    const g = grupo(chave); if (!g) return;
+    const t = textoWhats(g); const fotos = fotosEquipe(g.regs);
+    const nomeArq = `equipe ${g.equipe} ${dataBR(g.d).replace(/\//g, '-')}`.replace(/[^\w\- ]+/g, '').trim();
+    const dl = dialogo(`<div class="dlg"><div class="dlg-head"><h2>WhatsApp · ${h(g.equipe)}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
+      <p class="muted small">Texto sem valores em dinheiro${fotos.length ? ', com a foto da equipe' : ''}.</p>
+      ${fotos.length ? `<div class="fotos mini">${fotos.map((f) => `<div class="foto"><img alt="Foto da equipe" data-path="${h(f.path)}"></div>`).join('')}</div>`
+        : `<p class="dc-alerta">Este dia ainda não tem foto da equipe. Use o botão ${ic('camera', 15)} no apontamento para adicionar.</p>`}
+      <textarea class="input whats-txt" readonly rows="10" aria-label="Texto para o WhatsApp">${h(t)}</textarea>
+      <div class="dlg-foot"><button class="btn btn-ghost" data-copiar>${ic('copiar', 18)} Copiar texto</button>
+        <button class="btn btn-whats" data-enviar>${ic('whats', 18)} Enviar no WhatsApp</button></div></div>`);
+    hidratarFotos(dl);
+    let arquivos = null; const pronto = arquivosDasFotos(fotos, nomeArq).then((a) => (arquivos = a));
     $('[data-x]', dl).onclick = () => dl.close();
     $('[data-copiar]', dl).onclick = async () => { if (await copiarTexto(t)) toast('Texto copiado. Cole no grupo do WhatsApp.', 'in'); else toast('Não consegui copiar. Selecione o texto e copie.', 'erro'); };
+    $('[data-enviar]', dl).onclick = async () => {
+      await copiarTexto(t);   // se o WhatsApp não levar o texto junto com a foto, é só colar
+      if (arquivos === null) await pronto;
+      if (arquivos.length && navigator.canShare && navigator.canShare({ files: arquivos })) {
+        try { await navigator.share({ files: arquivos, text: t }); return; }
+        catch (e) { if (e && e.name === 'AbortError') return; }
+      }
+      // aparelho sem compartilhamento de arquivos (ex.: computador): baixa a foto e abre o WhatsApp com o texto
+      arquivos.forEach((f) => { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); });
+      window.open('https://wa.me/?text=' + encodeURIComponent(t), '_blank', 'noopener');
+      if (arquivos.length) toast('A foto foi baixada: anexe no grupo. O texto já está copiado.', '', 8000);
+    };
   }
 
   // =========================================================
-  //   PDF do dia (relatório para impressão / "Salvar como PDF")
+  //   PDF (relatório da equipe no dia — impressão / "Salvar como PDF")
   // =========================================================
-  function relatorioHTML(d) {
-    const regs = deDia(d); const c = calcular(regs);
-    const equipesTxt = [...new Set(c.equipes.map((r) => r.equipe))].join(', ') || '—';
+  function relatorioHTML(g) {
+    const regs = g.regs; const meta = metaGrupo(regs); const c = calcular(regs, meta);
     const pctDe = (v, t) => (t > 0 ? (v / t * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%' : '—');
     const atvOrd = c.atv.slice().sort((a, b) => (b.valor || 0) - (a.valor || 0));
-    const insights = [];
-    if (atvOrd[0] && atvOrd[0].valor) insights.push(`Maior faturamento: <b>${h(atvOrd[0].atividade)}</b> (${brl(atvOrd[0].valor)}, ${pctDe(atvOrd[0].valor, c.com)} do total).`);
-    if (c.meta != null) {
-      insights.push(c.dCom >= 0 ? `Com as diárias a meta foi <b>batida</b>: ${daMeta(c.com, c.meta)} (${sinal(c.dCom)}).` : `Com as diárias faltaram <b>${brl(-c.dCom)}</b> para a meta (${daMeta(c.com, c.meta)}).`);
-      if (c.vd > 0) insights.push(c.dSem >= 0 ? `Só com a produção (sem diárias) a meta também foi batida (${sinal(c.dSem)}).` : `Sem as diárias faltariam <b>${brl(-c.dSem)}</b> para a meta: as diárias cobriram ${brl(c.vd)}.`);
-    } else insights.push('<span class="r-alerta">Meta diária não cadastrada (tela Valores): o delta não pôde ser calculado.</span>');
     const motivos = Object.entries(c.parPorMot).sort((a, b) => b[1].horas - a[1].horas);
-    if (motivos.length) insights.push(`Principal motivo de parada: <b>${h(motivos[0][0])}</b> (${horasTxt(motivos[0][1].horas)}, ${pctDe(motivos[0][1].horas, c.hPar)} das horas paradas).`);
-    if (c.impacto > 0) insights.push(`As horas paradas representam uma perda estimada de <b>${brl(c.impacto)}</b> (valor/hora × horas paradas).`);
-    if (c.faltaValor.length) insights.push(`<span class="r-alerta">Sem valor/hora cadastrado para ${h(c.faltaValor.join(', '))}: essas diárias entraram como R$ 0,00.</span>`);
-    if (c.semTarifa.length) insights.push(`<span class="r-alerta">Atividade sem tarifa: ${h(c.semTarifa.join(', '))} (entrou como R$ 0,00).</span>`);
+    const insLinhas = c.atv.flatMap((a) => (a.insumos || []).map((x) => ({ insumo: x.insumo, quantidade: Number(x.quantidade) || 0, atividade: a.atividade, fazenda: a.fazenda, up: a.up })));
     const barra = c.com > 0 ? `<div class="r-barra"><span class="b-atv" style="width:${(c.sem / c.com * 100).toFixed(2)}%"></span><span class="b-dia" style="width:${(c.vd / c.com * 100).toFixed(2)}%"></span></div>
       <div class="r-leg"><span><i class="b-atv"></i>Atividades ${brl(c.sem)} (${pctDe(c.sem, c.com)})</span><span><i class="b-dia"></i>Diárias ${brl(c.vd)} (${pctDe(c.vd, c.com)})</span></div>` : '';
-    const fotos = regs.flatMap((r) => (r.fotos || []).map((f) => ({ path: f.path, leg: `${f.tipo === 'equipe' ? 'Equipe' : 'Observação'} · ${tituloReg(r)}` })));
+    const fotosEq = fotosEquipe(regs);
+    const obsBlocos = regs.map((r) => ({ titulo: tituloReg(r), texto: r.observacao, fotos: (r.fotos || []).filter((f) => f.tipo !== 'equipe') })).filter((o) => o.texto || o.fotos.length);
     const tab = (cab, nTexto, linhas, total) => `<table class="r-tab"><thead><tr>${cab.map((x, i) => `<th${i >= nTexto ? ' class="n"' : ''}>${x}</th>`).join('')}</tr></thead><tbody>${linhas.join('')}</tbody>${total ? `<tfoot>${total}</tfoot>` : ''}</table>`;
     const nTd = (v) => `<td class="n">${v}</td>`;
+    const tp = tipoEquipe(g);
+    const kpiDelta = (rot, v, sub) => `<div class="k ${v == null ? '' : v >= 0 ? 'k-pos' : 'k-neg'}"><span>${rot}</span><b>${v != null ? sinal(v) : '—'}</b><small>${sub}</small></div>`;
     return `<div class="rel">
-      <header class="r-cab"><div><div class="r-marca">PGO Digital</div><h1>Relatório diário de produção</h1><p class="r-data">${h(dataLonga(d))}</p></div>
-        <div class="r-quem"><b>${h(S.user.nome)}</b><span>${h(S.user.cdc)}</span><span>Equipes: ${h(equipesTxt)}</span><span>Gerado em ${new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span></div></header>
-      ${c.equipes.length ? `<h2 class="r-h2-top">Estrutura das equipes</h2>${tab(['Equipe', 'Tipo', 'Colab.', 'Faltas', 'Férias', 'Presentes', 'Tr. médio', 'Tr. pesado', 'Caminhão', 'Drone'], 2,
-        c.equipes.map((r) => `<tr><td>${h(r.equipe)}</td><td>${h(r.equipe_tipo || '—')}</td>${['colaboradores', 'faltas', 'ferias'].map((k) => nTd(r[k] ?? '—')).join('')}${nTd(r.colaboradores ? Math.max(0, r.colaboradores - (r.faltas || 0) - (r.ferias || 0)) : '—')}${['trator_medio', 'trator_pesado', 'caminhao', 'drone'].map((k) => nTd(r[k] ?? '—')).join('')}</tr>`))}` : ''}
+      <header class="r-cab"><div><div class="r-marca">PGO Digital</div><h1>Relatório diário · ${h(g.equipe)}</h1><p class="r-data">${h(dataLonga(g.d))}${tp ? ' · equipe ' + h(tp.toLowerCase()) : ''}</p></div>
+        <div class="r-quem"><b>${h(S.user.nome)}</b><span>${h(S.user.cdc)}</span><span>Gerado em ${new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span></div></header>
+      <section class="r-topo ${fotosEq.length ? '' : 'sem-foto'}">
+        <div class="r-estr"><h2 class="r-h2-top">Estrutura da equipe</h2>
+          ${c.equipes.length ? tab(['Tipo', 'Colab.', 'Faltas', 'Férias', 'Presentes', 'Tr. médio', 'Tr. pesado', 'Caminhão', 'Drone'], 1,
+            c.equipes.map((r) => `<tr><td>${h(r.equipe_tipo || '—')}</td>${['colaboradores', 'faltas', 'ferias'].map((k) => nTd(r[k] ?? '—')).join('')}${nTd(r.colaboradores ? Math.max(0, r.colaboradores - (r.faltas || 0) - (r.ferias || 0)) : '—')}${['trator_medio', 'trator_pesado', 'caminhao', 'drone'].map((k) => nTd(r[k] ?? '—')).join('')}</tr>`))
+            : '<p class="r-vazio">Sem apontamento de estrutura neste dia.</p>'}</div>
+        ${fotosEq.length ? `<figure class="r-fotoeq"><img alt="Foto da equipe" data-path="${h(fotosEq[0].path)}"><figcaption>Foto da equipe${fotosEq.length > 1 ? ` (+${fotosEq.length - 1} no fim)` : ''}</figcaption></figure>` : ''}
+      </section>
       <section class="r-kpis r-kpis3">
-        <div class="k k-meta"><span>Meta do dia</span><b>${c.meta != null ? brl(c.meta) : '—'}</b><small>${c.meta != null ? 'cadastrada em Valores' : 'não cadastrada'}</small></div>
-        <div class="k k-dest"><span>Faturamento com diárias</span><b>${brl(c.com)}</b><small>${c.meta != null ? daMeta(c.com, c.meta) : 'atividades + diárias'}</small></div>
-        <div class="k ${c.dCom == null ? '' : c.dCom >= 0 ? 'k-pos' : 'k-neg'}"><span>Delta com diárias</span><b>${c.dCom != null ? sinal(c.dCom) : '—'}</b><small>faturamento com diárias − meta</small></div>
+        <div class="k k-meta"><span>Meta da equipe</span><b>${meta != null ? brl(meta) : '—'}</b><small>${meta != null ? 'da planilha de equipes' : 'sem meta na planilha'}</small></div>
+        <div class="k k-dest"><span>Faturamento com diárias</span><b>${brl(c.com)}</b><small>${meta != null ? daMeta(c.com, meta) : 'atividades + diárias'}</small></div>
+        ${kpiDelta('Delta com diárias', c.dCom, 'faturamento com diárias − meta')}
         <div class="k k-perda"><span>Horas paradas · perdas</span><b>${c.impacto > 0 ? '−' + brl(c.impacto) : brl(0)}</b><small>${horasTxt(c.hPar)} parado${c.faltaValorPar.length ? ' · sem valor/hora: ' + h(c.faltaValorPar.join(', ')) : ''}</small></div>
-        <div class="k k-sem"><span>Faturamento sem diárias</span><b>${brl(c.sem)}</b><small>${c.meta != null ? daMeta(c.sem, c.meta) : 'só atividades'}</small></div>
-        <div class="k ${c.dSem == null ? '' : c.dSem >= 0 ? 'k-pos' : 'k-neg'}"><span>Delta sem diárias</span><b>${c.dSem != null ? sinal(c.dSem) : '—'}</b><small>faturamento sem diárias − meta</small></div>
+        <div class="k"><span>Faturamento sem diárias</span><b>${brl(c.sem)}</b><small>${meta != null ? daMeta(c.sem, meta) : 'só atividades'}</small></div>
+        ${kpiDelta('Delta sem diárias', c.dSem, 'faturamento sem diárias − meta')}
       </section>
       ${barra}
-      ${insights.length ? `<ul class="r-ins">${insights.map((x) => `<li>${x}</li>`).join('')}</ul>` : ''}
-      ${c.atv.length ? `<h2>Faturamento por atividade</h2>${tab(['Atividade', 'Fazenda · UP', 'Realizado', 'Tarifa', 'Valor', '% do total'], 2,
-        atvOrd.map((a) => `<tr><td>${h(a.atividade)}${a.regime ? `<small>${h(a.regime)}</small>` : ''}${(a.insumos || []).length ? `<small>Insumos: ${a.insumos.map((i) => `${h(i.insumo)} ${num(i.quantidade, 3)}`).join(', ')}</small>` : ''}</td><td>${h(a.fazenda)} · UP ${h(a.up)}</td>${nTd(`${num(a.q)} ${a.un}`)}${nTd(a.tarifa != null ? brl(a.tarifa) : '—')}${nTd(a.valor != null ? brl(a.valor) : '—')}${nTd(pctDe(a.valor || 0, c.com))}</tr>`),
-        `<tr><td colspan="2">Total das atividades (sem diárias)</td>${nTd(`${num(c.ha)} ha${c.hAtv ? ' · ' + num(c.hAtv) + ' h' : ''}`)}<td></td>${nTd(brl(c.sem))}${nTd(pctDe(c.sem, c.com))}</tr>`)}` : ''}
+      ${c.atv.length ? `<h2>Faturamento por atividade</h2>${tab(['Atividade', 'Fazenda · UP', 'Situação', 'Realizado', 'Tarifa', 'Valor'], 3,
+        atvOrd.map((a) => `<tr><td>${h(a.atividade)}${a.regime ? `<small>${h(a.regime)}</small>` : ''}${(a.insumos || []).length ? `<small>Insumos: ${a.insumos.map((i) => `${h(i.insumo)} ${num(i.quantidade, 3)}`).join(', ')}</small>` : ''}</td><td>${h(a.fazenda)} · UP ${h(a.up)}</td><td>${a.situacao ? `<span class="r-sit ${a.situacao === 'Finalizado' ? 'fin' : ''}">${h(a.situacao)}</span>` : '—'}</td>${nTd(`${num(a.q)} ${a.un}`)}${nTd(a.tarifa != null ? brl(a.tarifa) : '—')}${nTd(a.valor != null ? brl(a.valor) : '—')}</tr>`),
+        `<tr><td colspan="3">Total das atividades (sem diárias)</td>${nTd(`${num(c.ha)} ha${c.hAtv ? ' · ' + num(c.hAtv) + ' h' : ''}`)}<td></td>${nTd(brl(c.sem))}</tr>`)}` : ''}
       ${c.dia.length ? `<h2>Diárias</h2>${tab(['Tipo', 'Diária', 'Fazenda · UP', 'Horário', 'Horas', 'R$/h', 'Valor'], 4,
         c.dia.map((x) => `<tr><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}</td><td>${h(x.diaria)}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}${x.ml !== x.mb ? '<small>desconta almoço</small>' : ''}</td>${nTd(horasTxt(x.horas))}${nTd(x.vh != null ? brl(x.vh) : '<span class="r-alerta">sem valor</span>')}${nTd(brl(x.valor || 0))}</tr>`),
         Object.entries(c.diaPorRec).map(([k, v]) => `<tr class="sub"><td colspan="4">${h(k)}</td>${nTd(horasTxt(v.horas))}<td></td>${nTd(brl(v.valor))}</tr>`).join('') + `<tr><td colspan="4">Total das diárias</td>${nTd(horasTxt(c.hDia))}<td></td>${nTd(brl(c.vd))}</tr>`)}` : ''}
-      ${c.par.length ? `<h2>Horas paradas</h2>${tab(['Motivo', 'Tipo', 'Fazenda · UP', 'Horário', 'Horas', 'Perda estimada'], 4,
-        c.par.map((x) => `<tr><td>${h(x.motivo)}</td><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}</td>${nTd(horasTxt(x.horas))}${nTd(x.valor != null ? brl(x.valor) : '—')}</tr>`),
-        motivos.map(([k, v]) => `<tr class="sub"><td colspan="4">${h(k)} · ${pctDe(v.horas, c.hPar)}</td>${nTd(horasTxt(v.horas))}${nTd(v.valor ? brl(v.valor) : '—')}</tr>`).join('') + `<tr><td colspan="4">Total parado</td>${nTd(horasTxt(c.hPar))}${nTd(c.impacto ? brl(c.impacto) : '—')}</tr>`)}` : ''}
-      ${Object.keys(c.ins).length ? `<h2>Insumos aplicados</h2>${tab(['Insumo', 'Quantidade'], 1, Object.entries(c.ins).sort((a, b) => a[0].localeCompare(b[0], 'pt-BR')).map(([k, v]) => `<tr><td>${h(k)}</td>${nTd(num(v, 3))}</tr>`))}` : ''}
-      ${regs.some((r) => r.observacao) ? `<h2>Observações</h2><ul class="r-obs">${regs.filter((r) => r.observacao).map((r) => `<li><b>${h(tituloReg(r))}:</b> ${h(r.observacao)}</li>`).join('')}</ul>` : ''}
-      ${fotos.length ? `<h2>Fotos</h2><div class="r-fotos">${fotos.map((f) => `<figure><img alt="" data-path="${h(f.path)}"><figcaption>${h(f.leg)}</figcaption></figure>`).join('')}</div>` : ''}
-      <footer class="r-pe">Premissas: faturamento da atividade = tarifa da planilha × quantidade realizada. Diária = valor/hora do CDC × horas trabalhadas × quantidade, descontando o almoço (11h às 12h) quando o horário passa por ele. Delta = faturamento − meta do dia (com e sem as diárias). Perda das horas paradas = valor/hora do tipo × horas paradas × quantidade (não é descontada do faturamento).</footer>
+      <h2>Horas paradas e perdas</h2>
+      ${c.par.length ? tab(['Motivo', 'Tipo', 'Fazenda · UP', 'Horário', 'Horas', 'R$/h', 'Perda'], 4,
+        c.par.map((x) => `<tr><td>${h(x.motivo)}</td><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}</td>${nTd(horasTxt(x.horas))}${nTd(x.vh != null ? brl(x.vh) : '<span class="r-alerta">sem valor</span>')}${nTd(x.valor != null ? '−' + brl(x.valor) : '—')}</tr>`),
+        motivos.map(([k, v]) => `<tr class="sub"><td colspan="4">${h(k)} · ${pctDe(v.horas, c.hPar)} do tempo parado</td>${nTd(horasTxt(v.horas))}<td></td>${nTd(v.valor ? '−' + brl(v.valor) : '—')}</tr>`).join('') + `<tr><td colspan="4">Total parado</td>${nTd(horasTxt(c.hPar))}<td></td>${nTd(c.impacto ? '−' + brl(c.impacto) : brl(0))}</tr>`)
+        : '<p class="r-vazio">Nenhuma hora parada lançada.</p>'}
+      <h2>Insumos gastos</h2>
+      ${insLinhas.length ? tab(['Insumo', 'Atividade', 'Fazenda · UP', 'Quantidade'], 3,
+        insLinhas.map((x) => `<tr><td>${h(x.insumo)}</td><td>${h(x.atividade)}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td>${nTd(num(x.quantidade, 3))}</tr>`),
+        Object.entries(c.ins).sort((a, b) => a[0].localeCompare(b[0], 'pt-BR')).map(([k, v]) => `<tr class="sub"><td colspan="3">Total de ${h(k)}</td>${nTd(num(v, 3))}</tr>`).join(''))
+        : '<p class="r-vazio">Nenhum insumo lançado.</p>'}
+      <h2>Observações e fotos</h2>
+      ${obsBlocos.length || fotosEq.length > 1 ? obsBlocos.map((o) => `<div class="r-obs-b"><p><b>${h(o.titulo)}</b>${o.texto ? ': ' + h(o.texto) : ''}</p>
+          ${o.fotos.length ? `<div class="r-fotos">${o.fotos.map((f) => `<figure><img alt="" data-path="${h(f.path)}"></figure>`).join('')}</div>` : ''}</div>`).join('')
+        + (fotosEq.length > 1 ? `<div class="r-obs-b"><p><b>Outras fotos da equipe</b></p><div class="r-fotos">${fotosEq.slice(1).map((f) => `<figure><img alt="" data-path="${h(f.path)}"></figure>`).join('')}</div></div>` : '')
+        : '<p class="r-vazio">Nenhuma observação lançada.</p>'}
+      <footer class="r-pe">Premissas: faturamento da atividade = tarifa da planilha × quantidade realizada. Diária = valor/hora do CDC × horas trabalhadas × quantidade, descontando o almoço (11h às 12h) quando o horário passa por ele. Meta = coluna METAS da planilha de equipes. Delta = faturamento − meta (com e sem as diárias). Perda das horas paradas = valor/hora × horas paradas × quantidade (não é descontada do faturamento).</footer>
     </div>`;
   }
-  async function gerarPDF(d) {
+  async function gerarPDF(chave) {
+    const g = grupo(chave); if (!g) return;
     let box = $('#impressao'); if (!box) { box = document.createElement('div'); box.id = 'impressao'; document.body.appendChild(box); }
-    box.innerHTML = relatorioHTML(d);
+    box.innerHTML = relatorioHTML(g);
     toast('Preparando o PDF…', '', 2500);
     await hidratarFotos(box);
     await Promise.all($$('img', box).map((img) => (img.complete ? 0 : new Promise((ok) => { img.onload = img.onerror = ok; setTimeout(ok, 8000); }))));
-    const antes = document.title; document.title = `PGO ${dataBR(d).replace(/\//g, '-')} ${S.user.nome}`;
+    const antes = document.title; document.title = `PGO ${g.equipe} ${dataBR(g.d).replace(/\//g, '-')}`;
     window.print();
     setTimeout(() => { document.title = antes; }, 1500);
   }

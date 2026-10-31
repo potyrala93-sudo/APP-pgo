@@ -433,3 +433,74 @@ h2.mt { margin-top: 10px; }
 .r-fotos figcaption { font-size: 7.5pt; color: #5a6a61; margin-top: 2px; }
 .r-pe { margin-top: 16px; padding-top: 6px; border-top: 1px solid #d3dcd6; font-size: 7.5pt; color: #5a6a61; }
 #mais-dias { max-width: 760px; }
+
+/* ===================== PGO Digital v2.1 ===================== */
+/* Início: grade 2×2 */
+.grade { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 760px; }
+.tile { position: relative; display: grid; align-content: start; gap: 6px; min-height: 148px; padding: 16px 14px; border-radius: 18px; text-decoration: none;
+  color: #fff; background: var(--cor); box-shadow: 0 6px 18px color-mix(in srgb, var(--cor) 28%, transparent); overflow: hidden; }
+.tile::after { content: ""; position: absolute; right: -30px; bottom: -30px; width: 110px; height: 110px; border-radius: 50%; background: rgba(255, 255, 255, .09); }
+.tile:hover { filter: brightness(1.06); } .tile:active { transform: scale(.98); }
+.tile .ico { width: 50px; height: 50px; border-radius: 14px; display: grid; place-items: center; background: rgba(255, 255, 255, .17); margin-bottom: 6px; }
+.tile b { font-size: 1.16rem; font-weight: 800; font-stretch: 87.5%; line-height: 1.15; }
+.tile small { font-size: .82rem; line-height: 1.3; opacity: .88; }
+.t1 { --cor: #2d5a4b; } .t2 { --cor: #3b6ea5; } .t3 { --cor: #a4461f; } .t4 { --cor: #4c5a53; }
+@media (min-width: 720px) { .tile { min-height: 160px; padding: 20px; } .tile b { font-size: 1.3rem; } }
+.sec-tit { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 28px 0 10px; max-width: 760px; }
+.sec-tit h2 { font-size: 1.25rem; margin: 0; }
+.mais { max-width: 760px; }
+.top-val span { margin-left: 2px; }
+@media (max-width: 400px) { .top-val span { display: none; } .top-val { padding: 6px 9px; } }
+
+/* Dia e cartão da equipe */
+.dia-bloco { margin-bottom: 18px; max-width: 760px; }
+.dia-bloco > .dia-tit { display: flex; align-items: center; gap: 8px; font-size: 1.02rem; margin: 0 0 8px 2px; }
+.dia-tit .hj { font-style: normal; font-size: .7rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; background: var(--safety); color: var(--safety-ink); padding: 2px 8px; border-radius: 999px; }
+.eq-card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 12px; display: grid; gap: 12px; box-shadow: 0 1px 2px rgba(15, 30, 22, .05); }
+.ec-head { display: flex; align-items: center; gap: 12px; }
+.ec-foto { flex: none; width: 54px; height: 54px; border-radius: 14px; overflow: hidden; border: 0; padding: 0; background: var(--leaf); color: var(--euca); display: grid; place-items: center; cursor: pointer; }
+.ec-foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ec-foto.vazio { cursor: default; }
+.ec-tit { min-width: 0; } .ec-tit h4 { font-size: 1.15rem; font-weight: 800; margin: 0; }
+.ec-tit p { color: var(--muted); font-size: .86rem; margin: 2px 0 0; } .ec-tit p b { color: var(--ink); }
+.fat .meta b { color: var(--ink); }
+.dc-bts { display: flex; align-items: center; gap: 0; padding-right: 4px; flex: none; }
+.dc-bt { color: var(--muted); width: 40px; height: 40px; cursor: pointer; }
+.dc-bt:hover { color: var(--euca); }
+.dc-bt.del:hover { color: var(--danger); }
+.dc-bt:focus-within { outline: 3px solid color-mix(in srgb, var(--focus) 45%, transparent); }
+.dc-lista.solta { background: var(--surface); }
+@media (max-width: 400px) { .dc-abrir { padding-left: 8px; gap: 8px; } .dc-ico { width: 30px; height: 30px; } .dc-bt { width: 36px; } }
+
+/* Meus registros */
+.tools { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; max-width: 760px; }
+.tools select.input { flex: 1; min-width: 150px; width: auto; }
+.resumo-reg { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 4px 0 16px; max-width: 760px; }
+.resumo-reg > div { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m); padding: 8px 10px; display: grid; gap: 1px; min-width: 0; }
+.resumo-reg span { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 700; }
+.resumo-reg b { font-size: .98rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.resumo-reg .pos { background: var(--in-bg); } .resumo-reg .pos b { color: var(--in); }
+.resumo-reg .neg { background: var(--danger-bg); } .resumo-reg .neg b { color: var(--danger); }
+@media (max-width: 620px) { .resumo-reg { grid-template-columns: 1fr 1fr; } .resumo-reg > div:first-child { grid-column: 1 / -1; } }
+.dia { max-width: 760px; }
+
+/* Itens que recolhem: editar / excluir */
+.mini-w { display: flex; align-items: stretch; gap: 6px; }
+.mini-w .item-mini { flex: 1; min-width: 0; }
+.mini-ed { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--euca); font-weight: 700; font-size: .82rem; }
+.mini-rm { flex: none; align-self: center; color: var(--danger); }
+@media (max-width: 380px) { .mini-ed span { display: none; } }
+.seg.seg-2 { grid-template-columns: 1fr 1fr; }
+.sit { font-size: .74rem; font-weight: 750; padding: 1px 8px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); }
+.sit.fin { background: var(--in-bg); color: var(--in); }
+
+/* PDF: estrutura e foto da equipe no topo */
+.r-topo { display: grid; grid-template-columns: 1fr 190px; gap: 12px; align-items: start; margin-bottom: 10px; break-inside: avoid; }
+.r-topo.sem-foto { grid-template-columns: 1fr; }
+.r-fotoeq { margin: 0; } .r-fotoeq img { width: 100%; height: 135px; object-fit: cover; border-radius: 8px; border: 1px solid #d3dcd6; display: block; }
+.r-fotoeq figcaption { font-size: 7.5pt; color: #5a6a61; margin-top: 2px; }
+.r-vazio { color: #5a6a61; margin: 4px 0; }
+.r-sit { font-size: 7.5pt; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: #fff3d1; color: #8a5600; white-space: nowrap; }
+.r-sit.fin { background: #e2f1e5; color: #2d6a3e; }
+
+.r-obs-b { margin-bottom: 10px; break-inside: avoid; } .r-obs-b p { margin: 0 0 6px; }

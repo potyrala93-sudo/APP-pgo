@@ -1,9 +1,10 @@
 /* =========================================================
-   PGO Digital — Apontamento de produção
-   Home › Apontamento | Diárias | Horas Paradas | Meus lançamentos
+   PGO Digital v2 — Apontamento de produção
+   Início: atalhos + lançamentos agrupados em cartões por dia (editar, PDF, WhatsApp)
+   Lançamentos: Apontamento (atividades, diárias, horas paradas, insumos, fotos) | Diárias | Horas Paradas
+   Valores: valor/hora das diárias por tipo (colaborador, trator médio, trator pesado, caminhão)
    Login por nome e senha; cada usuário vê só os próprios dados.
-   Equipes, fazendas/talhões e insumos vêm das planilhas do Google (config.js).
-   Sem internet: o lançamento fica no aparelho e é enviado sozinho depois.
+   Sem internet: o lançamento (com as fotos) fica no aparelho e é enviado sozinho depois.
    ========================================================= */
 (function () {
   'use strict';
@@ -11,11 +12,13 @@
   // ---------- Configuração ----------
   const CFG = window.PGO_CONFIG || {};
   const COMPRAS = window.APP_CONFIG || {};
-  const URL_SB = (CFG.SUPABASE_URL || COMPRAS.SUPABASE_URL || '').trim();
+  const URL_SB = (CFG.SUPABASE_URL || COMPRAS.SUPABASE_URL || '').trim().replace(/\/+$/, '');
   const KEY_SB = (CFG.SUPABASE_ANON_KEY || COMPRAS.SUPABASE_ANON_KEY || '').trim();
   const configurado = /^https:\/\//.test(URL_SB) && KEY_SB.length > 20 && !/SEU-PROJETO|COLE_AQUI/.test(URL_SB + KEY_SB);
   const PLANILHAS = CFG.PLANILHAS || {};
   const MOTIVOS = (CFG.MOTIVOS && CFG.MOTIVOS.length) ? CFG.MOTIVOS : ['Chuva', 'Manutenção / quebra de máquina', 'Outros'];
+  const RECURSOS = ['Colaborador', 'Trator médio', 'Trator pesado', 'Caminhão'];
+  const BUCKET = 'pgo-fotos';
 
   // ---------- Utilidades ----------
   const $ = (s, el) => (el || document).querySelector(s);
@@ -23,35 +26,56 @@
   const h = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const hoje = () => new Date().toLocaleDateString('sv-SE');
   const diasAtras = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toLocaleDateString('sv-SE'); };
-  const dataBR = (d) => { if (!d) return '—'; const [a, m, dd] = String(d).slice(0, 10).split('-'); return `${dd}/${m}/${a}`; };
-  const diaSemana = (d) => new Date(String(d).slice(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
-  const num = (n, dec) => Number(n || 0).toLocaleString('pt-BR', { maximumFractionDigits: dec == null ? 3 : dec });
-  const lerNum = (s) => { s = String(s == null ? '' : s).trim().replace(/\s/g, ''); if (!s) return null; if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.'); const n = Number(s); return Number.isFinite(n) ? n : NaN; };
+  const dia10 = (d) => String(d || '').slice(0, 10);
+  const dataBR = (d) => { if (!d) return '—'; const [a, m, dd] = dia10(d).split('-'); return `${dd}/${m}/${a}`; };
+  const dataObj = (d) => new Date(dia10(d) + 'T12:00:00');
+  const diaSemana = (d) => dataObj(d).toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+  const dataLonga = (d) => dataObj(d).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  const num = (n, dec) => Number(n || 0).toLocaleString('pt-BR', { maximumFractionDigits: dec == null ? 2 : dec });
+  const brl = (n) => Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const pct = (n) => (n == null || !Number.isFinite(n) ? '—' : (n >= 0 ? '+' : '') + (n * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%');
+  const lerNum = (s) => { if (typeof s === 'number') return s; s = String(s == null ? '' : s).trim().replace(/\s/g, '').replace(/^R\$/i, ''); if (!s) return null; if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.'); const n = Number(s); return Number.isFinite(n) ? n : NaN; };
+  const numCampo = (n) => (n == null || n === '' ? '' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 4, useGrouping: false }));
   const semAcento = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   const igual = (a, b) => semAcento(String(a || '').trim()) === semAcento(String(b || '').trim());
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
   const hhmm = (t) => String(t || '').slice(0, 5);
+  const minDoDia = (t) => { const [a, b] = hhmm(t).split(':').map(Number); return a * 60 + b; };
   function minutos(i, f) {
-    if (!i || !f) return 0;
-    const [a, b] = i.split(':').map(Number), [c, d] = f.split(':').map(Number);
-    let m = (c * 60 + d) - (a * 60 + b); if (m < 0) m += 1440; return m;
+    i = hhmm(i); f = hhmm(f); if (!i || !f) return 0;
+    let m = minDoDia(f) - minDoDia(i); if (m < 0) m += 1440; return m;
+  }
+  // minutos trabalhados: desconta o que cair entre 11h e 12h (almoço)
+  function minLiquidos(i, f) {
+    const m = minutos(i, f); if (!m) return 0;
+    const s = minDoDia(i), e = s + m; const sobra = (a, b) => Math.max(0, Math.min(e, b) - Math.max(s, a));
+    return m - sobra(660, 720) - sobra(2100, 2160);
   }
   const duracao = (m) => { m = Math.round(m); const hh = Math.floor(m / 60), mm = m % 60; return hh ? `${hh}h${mm ? String(mm).padStart(2, '0') : ''}` : `${mm} min`; };
+  const horasTxt = (hrs) => duracao(hrs * 60);
   const ordenarUP = (a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true });
   const ler = (k, padrao) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v == null ? padrao : v; } catch (_) { return padrao; } };
   const gravar = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} };
+  const clonar = (o) => JSON.parse(JSON.stringify(o));
+  const unidade = (atv) => (/\bHORAS?\b/i.test(atv || '') ? 'h' : 'ha');
+  const plural = (n, um, varios) => `${num(n, 0)} ${n === 1 ? um : varios}`;
 
   const P = {
     apont: 'M9 4h6a1 1 0 0 1 1 1v1h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h2V5a1 1 0 0 1 1-1zM9 12l2 2 4-4M8 17h8',
     diaria: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2',
     parada: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 9v6M14 9v6',
-    lista: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
-    voltar: 'M15 6l-6 6 6 6', x: 'M6 6l12 12M18 6L6 18', plus: 'M12 5v14M5 12h14', minus: 'M5 12h14', chev: 'M9 6l6 6-6 6',
+    valor: 'M3 6h18v12H3zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 9v.01M18 15v.01',
+    voltar: 'M15 6l-6 6 6 6', x: 'M6 6l12 12M18 6L6 18', plus: 'M12 5v14M5 12h14', minus: 'M5 12h14', chev: 'M9 6l6 6-6 6', baixo: 'M6 9l6 6 6-6',
     search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4', sair: 'M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3M10 16l-4-4 4-4M6 12h10',
     menu: 'M4 4h6.5v6.5H4zM13.5 4H20v6.5h-6.5zM4 13.5h6.5V20H4zM13.5 13.5H20V20h-6.5z',
     lixo: 'M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3',
     nuvem: 'M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1-1 8H7z', olho: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
     mapa: 'M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z',
+    editar: 'M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4',
+    pdf: 'M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6',
+    whats: 'M4 20l1.4-4.2A8 8 0 1 1 8.4 19z',
+    camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+    copiar: 'M9 9h11v11H9zM5 15H4V4h11v1',
   };
   const ic = (n, s) => `<svg width="${s || 22}" height="${s || 22}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[n]}"/></svg>`;
 
@@ -60,8 +84,8 @@
     const t = document.createElement('div'); t.className = 'toast ' + (tipo || ''); t.textContent = msg; box.appendChild(t);
     setTimeout(() => t.remove(), tempo || 4500);
   }
-  function dialogo(html) {
-    const d = document.createElement('dialog'); d.innerHTML = html; document.body.appendChild(d);
+  function dialogo(html, cls) {
+    const d = document.createElement('dialog'); if (cls) d.className = cls; d.innerHTML = html; document.body.appendChild(d);
     d.addEventListener('close', () => setTimeout(() => d.remove(), 50));
     d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
     d.showModal(); return d;
@@ -78,7 +102,9 @@
     const m = (e && (e.message || e.error_description)) || String(e);
     if (redeErro(e)) return 'Sem conexão com a internet.';
     if (/anonymous sign-ins are disabled/i.test(m)) return 'O login anônimo está desligado no Supabase (Authentication › Allow anonymous sign-ins).';
-    if (/could not find the function|does not exist|schema cache/i.test(m)) return 'O banco ainda não tem as tabelas do PGO. Rode o arquivo pgo.sql no SQL Editor do Supabase.';
+    if (/could not find the function|does not exist|schema cache/i.test(m)) return 'O banco ainda não tem a versão nova do PGO. Rode o arquivo pgo.sql no SQL Editor do Supabase.';
+    if (/bucket not found/i.test(m)) return 'A pasta de fotos não existe no Supabase. Rode o arquivo pgo.sql de novo.';
+    if (/row-level security|unauthorized|403/i.test(m)) return 'Sem permissão para enviar a foto. Entre de novo no app.';
     if (/JWT|refresh token/i.test(m)) return 'Sua sessão expirou. Entre novamente.';
     return m;
   }
@@ -86,15 +112,15 @@
   // ---------- Estado ----------
   const S = {
     sb: null, user: ler('pgo.usuario', null),
-    base: ler('pgo.base', { equipes: [], fazendas: [], insumos: [], em: null }),
-    dados: { apontamentos: [], diarias: [], paradas: [] },
-    filtro: { aba: 'apontamentos', periodo: '30', busca: '' },
+    base: Object.assign({ equipes: [], fazendas: [], insumos: [], atividades: [], em: null }, ler('pgo.base', {})),
+    regs: [], valores: {}, janela: 60, nDias: 5,
     enviando: false,
   };
-  const chaveFila = () => 'pgo.fila.' + (S.user ? S.user.id : '');
+  const chaveFila = () => 'pgo.fila2.' + (S.user ? S.user.id : '');
   const fila = () => ler(chaveFila(), []);
   const salvarFila = (f) => gravar(chaveFila(), f);
   const app = () => $('#app');
+  const urlFoto = (path) => `${URL_SB}/storage/v1/object/public/${BUCKET}/${path.split('/').map(encodeURIComponent).join('/')}`;
 
   function cliente() {
     if (S.sb) return S.sb;
@@ -110,6 +136,45 @@
     return r.data.session;
   }
   async function rpc(fn, args) { const { data, error } = await S.sb.rpc(fn, args || {}); if (error) throw error; return data; }
+
+  // ---------- Fotos guardadas no aparelho (IndexedDB) ----------
+  const IDB = {
+    db: null,
+    abrir() {
+      if (!this.db) this.db = new Promise((ok, no) => { const r = indexedDB.open('pgo-digital', 1); r.onupgradeneeded = () => r.result.createObjectStore('fotos'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); });
+      return this.db;
+    },
+    async op(modo, fn) {
+      const db = await this.abrir();
+      return new Promise((ok, no) => { const tx = db.transaction('fotos', modo); const req = fn(tx.objectStore('fotos')); tx.oncomplete = () => ok(req && req.result); tx.onerror = () => no(tx.error); tx.onabort = () => no(tx.error); });
+    },
+    get(k) { return this.op('readonly', (s) => s.get(k)).catch(() => null); },
+    put(k, v) { return this.op('readwrite', (s) => s.put(v, k)); },
+    del(k) { return this.op('readwrite', (s) => s.delete(k)).catch(() => null); },
+  };
+  const urlsLocais = new Map();
+  async function hidratarFotos(raiz) {
+    await Promise.all($$('img[data-path]', raiz).map(async (img) => {
+      if (img.getAttribute('src')) return;
+      const p = img.dataset.path;
+      if (urlsLocais.has(p)) { img.src = urlsLocais.get(p); return; }
+      const blob = await IDB.get(p);
+      if (blob) { const u = URL.createObjectURL(blob); urlsLocais.set(p, u); img.src = u; } else img.src = urlFoto(p);
+    }));
+  }
+  async function reduzirFoto(arq, max) {
+    max = max || 1600; let img;
+    try { img = await createImageBitmap(arq, { imageOrientation: 'from-image' }); }
+    catch (_) { img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = URL.createObjectURL(arq); }); }
+    const k = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return new Promise((ok, no) => c.toBlob((b) => (b ? ok(b) : no(new Error('foto'))), 'image/jpeg', 0.8));
+  }
+  function verFoto(path) {
+    const d = dialogo(`<div class="dlg foto-grande"><div class="dlg-head"><h2>Foto</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div><img alt="Foto do lançamento" data-path="${h(path)}"></div>`);
+    $('[data-x]', d).onclick = () => d.close(); hidratarFotos(d);
+  }
 
   // ---------- Planilhas do Google ----------
   function lerCSV(txt) {
@@ -127,17 +192,19 @@
     return linhas.filter((l) => l.some((x) => String(x).trim())).map((l) => Object.fromEntries(cab.map((k, i) => [k, String(l[i] == null ? '' : l[i]).trim()])));
   }
   async function planilha(id) {
+    if (!id) return [];
     const r = await fetch(`https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=0&_=${Date.now()}`);
     if (!r.ok) throw new Error('planilha ' + r.status);
     return lerCSV(await r.text());
   }
   async function carregarBase() {
     try {
-      const [eq, fz, ins] = await Promise.all([planilha(PLANILHAS.equipes), planilha(PLANILHAS.fazendas), planilha(PLANILHAS.insumos)]);
+      const [eq, fz, ins, atv] = await Promise.all([planilha(PLANILHAS.equipes), planilha(PLANILHAS.fazendas), planilha(PLANILHAS.insumos), planilha(PLANILHAS.atividades)]);
       S.base = {
         equipes: eq.map((r) => ({ cdc: r.cdc, equipe: r.equipe, tipo: /mec/i.test(r.tipo) ? 'Mecanizado' : /man/i.test(r.tipo) ? 'Manual' : (r.tipo || '') })).filter((r) => r.equipe),
         fazendas: fz.map((r) => ({ cdc: r.cdc, fazenda: r.fazenda, up: r.up || r.talhao, area: lerNum(r.area) })).filter((r) => r.fazenda && r.up),
         insumos: ins.map((r) => ({ cdc: r.cdc, insumo: r.insumo })).filter((r) => r.insumo),
+        atividades: atv.map((r) => { const t = lerNum(r.tarifas || r.tarifa); return { cdc: r.cdc, regime: r.regime || '', atividade: r.atividade, tarifa: Number.isFinite(t) ? t : null }; }).filter((r) => r.atividade),
         em: new Date().toISOString(),
       };
       gravar('pgo.base', S.base);
@@ -149,44 +216,50 @@
   const fazendas = () => [...new Set(doCDC(S.base.fazendas).map((r) => r.fazenda))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   const talhoes = (fz) => doCDC(S.base.fazendas).filter((r) => r.fazenda === fz).sort((a, b) => ordenarUP(a.up, b.up));
   const insumos = () => [...new Set(doCDC(S.base.insumos).map((r) => r.insumo))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const atividades = () => doCDC(S.base.atividades || []).slice().sort((a, b) => a.atividade.localeCompare(b.atividade, 'pt-BR', { numeric: true }));
   const cdcs = () => [...new Set([...S.base.equipes, ...S.base.fazendas, ...S.base.insumos].map((r) => r.cdc).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   const areaDe = (fz, up) => { const t = S.base.fazendas.find((r) => r.fazenda === fz && String(r.up) === String(up)); return t ? t.area : null; };
+  const atividadeDe = (nome) => (S.base.atividades || []).find((x) => igual(x.atividade, nome)) || null;
 
   // ---------- Lançamentos (servidor + fila do aparelho) ----------
   async function carregarDados() {
-    if (!S.sb || !navigator.onLine) return false;
+    if (!S.sb || !navigator.onLine || !S.user) return false;
     try {
-      const [a, d, p] = await Promise.all([
-        S.sb.from('pgo_apontamentos').select('*').order('data', { ascending: false }).order('criado_em', { ascending: false }).limit(500),
-        S.sb.from('pgo_diarias').select('*').order('data', { ascending: false }).order('criado_em', { ascending: false }).limit(800),
-        S.sb.from('pgo_horas_paradas').select('*').order('data', { ascending: false }).order('criado_em', { ascending: false }).limit(800),
-      ]);
-      for (const r of [a, d, p]) if (r.error) throw r.error;
-      S.dados = { apontamentos: a.data, diarias: d.data, paradas: p.data };
-      gravar('pgo.dados.' + S.user.id, S.dados);
+      const r = await rpc('pgo_meus_registros', { p_desde: diasAtras(S.janela) });
+      S.regs = Array.isArray(r) ? r : [];
+      gravar('pgo.regs.' + S.user.id, S.regs);
       return true;
     } catch (e) { if (!redeErro(e)) console.warn(e); return false; }
   }
+  async function carregarValores() {
+    if (!S.sb || !navigator.onLine || !S.user) return false;
+    try { S.valores = (await rpc('pgo_valores')) || {}; gravar('pgo.valores.' + S.user.cdc, S.valores); return true; }
+    catch (e) { if (!redeErro(e)) console.warn(e); return false; }
+  }
   // junta o que já está no servidor com o que ainda está na fila
   function visao() {
-    const v = { apontamentos: S.dados.apontamentos.slice(), diarias: S.dados.diarias.slice(), paradas: S.dados.paradas.slice() };
+    const v = S.regs.map((r) => Object.assign({}, r));
     for (const it of fila()) {
-      const p = Object.assign({}, it.dados, { _fila: true, _erro: it.erro || null, usuario_id: S.user.id, criado_em: it.criado });
-      if (it.tipo === 'apontamento') {
-        if (v.apontamentos.some((x) => x.id === p.id)) continue;
-        v.apontamentos.unshift(p);
-        (p.diarias || []).forEach((x) => v.diarias.unshift(Object.assign({}, x, { _fila: true, apontamento_id: p.id, data: p.data, criado_em: it.criado })));
-        (p.paradas || []).forEach((x) => v.paradas.unshift(Object.assign({ fazenda: p.fazenda, up: p.up }, x, { _fila: true, apontamento_id: p.id, data: p.data, criado_em: it.criado })));
-      } else if (it.tipo === 'diaria') { if (!v.diarias.some((x) => x.id === p.id)) v.diarias.unshift(p); }
-      else if (it.tipo === 'parada') { if (!v.paradas.some((x) => x.id === p.id)) v.paradas.unshift(p); }
+      const p = Object.assign({}, it.dados, { _fila: true, _erro: it.erro || null, criado_em: it.dados.criado_em || it.criado });
+      const k = v.findIndex((x) => x.id === p.id);
+      if (k >= 0) v[k] = p; else v.push(p);
     }
-    return v;
+    return v.sort((a, b) => (dia10(b.data).localeCompare(dia10(a.data))) || String(a.criado_em).localeCompare(String(b.criado_em)));
   }
-  const FUNCAO = { apontamento: 'pgo_salvar_apontamento', diaria: 'pgo_salvar_diaria', parada: 'pgo_salvar_parada' };
-  async function lancar(tipo, dados) {
-    const f = fila(); f.push({ tipo, dados, criado: new Date().toISOString() }); salvarFila(f);
-    await enviarFila(true);
-    return !fila().some((x) => x.dados.id === dados.id && !x.erro);   // true = já chegou ao servidor
+  const registro = (id) => visao().find((x) => x.id === id) || null;
+
+  async function enviarFotos(fotos) {
+    for (const f of fotos || []) {
+      const blob = await IDB.get(f.path); if (!blob) continue;
+      const { error } = await S.sb.storage.from(BUCKET).upload(f.path, blob, { contentType: 'image/jpeg', cacheControl: '31536000' });
+      if (error && !/already exists|duplicate|409/i.test((error.message || '') + ' ' + (error.statusCode || error.error || ''))) throw error;
+      await IDB.del(f.path);
+    }
+  }
+  async function apagarArquivos(paths) {
+    paths = (paths || []).filter(Boolean); if (!paths.length) return;
+    for (const p of paths) await IDB.del(p);
+    try { if (navigator.onLine) await S.sb.storage.from(BUCKET).remove(paths); } catch (_) {}
   }
   async function enviarFila(silencioso) {
     if (S.enviando || !S.sb || !navigator.onLine || !S.user) { barra(); return; }
@@ -196,18 +269,21 @@
       for (const it of fila()) {
         if (it.erro) continue;
         try {
-          await rpc(FUNCAO[it.tipo], { p: it.dados });
+          await enviarFotos(it.dados.fotos);
+          const dados = Object.assign({}, it.dados); delete dados.criado_em;
+          await rpc('pgo_salvar_registro', { p: dados });
           salvarFila(fila().filter((x) => x.dados.id !== it.dados.id));
+          apagarArquivos(it.remover);
         } catch (e) {
           if (redeErro(e)) break;
-          if (/Faça login novamente|sessão|JWT/i.test(e.message || '')) { break; }
+          if (/Faça login novamente|sessão|JWT/i.test(e.message || '')) break;
           salvarFila(fila().map((x) => (x.dados.id === it.dados.id ? Object.assign({}, x, { erro: msgErro(e) }) : x)));
           if (!silencioso) toast('Um lançamento foi recusado: ' + msgErro(e), 'erro', 9000);
         }
       }
       await carregarDados();
     } catch (e) { if (!redeErro(e)) console.warn(e); }
-    finally { S.enviando = false; barra(); if (rotaAtual() === 'lancamentos' || rotaAtual() === 'home') render(); }
+    finally { S.enviando = false; barra(); if (rotaAtual() === 'home') render(); }
   }
   window.addEventListener('online', () => { barra(); enviarFila(); });
   window.addEventListener('offline', barra);
@@ -275,11 +351,15 @@
       catch (ex) { err.textContent = msgErro(ex); bt.disabled = false; bt.textContent = 'Criar cadastro e entrar'; }
     };
   }
+  function carregarDoAparelho() {
+    S.regs = ler('pgo.regs.' + S.user.id, []);
+    S.valores = ler('pgo.valores.' + S.user.cdc, {});
+  }
   function entrou(u) {
     S.user = u; gravar('pgo.usuario', u); gravar('pgo.ultimo_nome', u.nome);
-    S.dados = ler('pgo.dados.' + u.id, { apontamentos: [], diarias: [], paradas: [] });
+    carregarDoAparelho();
     shell(); location.hash = '#/home'; render(true);
-    carregarDados().then(() => render());
+    Promise.all([carregarDados(), carregarValores()]).then(() => render());
     enviarFila();
   }
   async function sair() {
@@ -288,15 +368,15 @@
     if (!(await confirmar('Sair do PGO Digital?', 'No próximo acesso, entre com o seu nome e senha.', 'Sair'))) return;
     try { if (navigator.onLine) await rpc('pgo_sair'); } catch (_) {}
     try { await S.sb.auth.signOut(); } catch (_) {}
-    try { localStorage.removeItem('pgo.usuario'); localStorage.removeItem('pgo.dados.' + S.user.id); } catch (_) {}
-    S.user = null; S.dados = { apontamentos: [], diarias: [], paradas: [] };
+    try { localStorage.removeItem('pgo.usuario'); localStorage.removeItem('pgo.regs.' + S.user.id); } catch (_) {}
+    S.user = null; S.regs = []; S.valores = {};
     location.hash = ''; telaLogin();
   }
 
   // =========================================================
   //   Estrutura e rotas
   // =========================================================
-  const TITULOS = { home: 'Início', apontamento: 'Apontamento', diaria: 'Diária', parada: 'Hora parada', lancamentos: 'Meus lançamentos' };
+  const ROTAS = { home: 1, apontamento: 1, diarias: 1, paradas: 1, valores: 1 };
   function shell() {
     app().innerHTML = `
       <header class="topbar"><a class="menu-btn" href="../APP-menu/" aria-label="Voltar ao menu dos apps" title="Menu dos apps">${ic('menu', 18)}<span>Menu</span></a>
@@ -316,51 +396,191 @@
     else if (pend || erro) { n.hidden = false; n.className = 'net'; n.textContent = erro ? `${erro} com erro` : `${pend} na fila`; }
     else n.hidden = true;
   }
-  const rotaAtual = () => { const r = location.hash.replace(/^#\/?/, '').split('?')[0]; return TITULOS[r] ? r : 'home'; };
+  const rotaAtual = () => { const r = location.hash.replace(/^#\/?/, '').split('?')[0]; return ROTAS[r] ? r : 'home'; };
+  const paramRota = (k) => new URLSearchParams(location.hash.split('?')[1] || '').get(k);
   window.addEventListener('hashchange', () => render(true));
   window.addEventListener('beforeunload', (e) => { if ($('form[data-sujo="1"]')) { e.preventDefault(); e.returnValue = ''; } });
 
   function render(trocou) {
     if (!S.user || !$('#view')) return;
-    const r = rotaAtual(); const view = $('#view');
-    if (!trocou && view.dataset.rota === r && $('form[data-sujo="1"]', view)) return;   // não apaga o que está sendo digitado
-    const mudou = view.dataset.rota !== r; view.dataset.rota = r;
-    ({ home: vHome, apontamento: vApontamento, diaria: vDiaria, parada: vParada, lancamentos: vLancamentos })[r](view);
+    const r = rotaAtual(); const view = $('#view'); const chave = location.hash;
+    if (!trocou && view.dataset.rota === chave && $('form[data-sujo="1"]', view)) return;   // não apaga o que está sendo digitado
+    if (!trocou && r !== 'home' && view.dataset.rota === chave) return;                  // formulários só redesenham ao entrar
+    const mudou = view.dataset.rota !== chave; view.dataset.rota = chave;
+    ({ home: vHome, apontamento: vApontamento, diarias: vDiarias, paradas: vParadas, valores: vValores })[r](view);
     if (mudou) { window.scrollTo(0, 0); view.focus({ preventScroll: true }); }
   }
   const cabecalho = (titulo, sub) => `<div class="sub-head"><a class="btn btn-ghost btn-sm" href="#/home">${ic('voltar', 18)} Início</a></div>
     <div class="page-head"><div><h1>${h(titulo)}</h1>${sub ? `<p>${sub}</p>` : ''}</div></div>`;
 
   // =========================================================
-  //   Home
+  //   Cálculos do dia (faturamento, horas, insumos)
+  // =========================================================
+  const metaDia = () => { const v = S.valores._meta; return v && v.valor != null && v.valor !== '' && Number(v.valor) > 0 ? Number(v.valor) : null; };
+  const sinal = (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + brl(Math.abs(v));
+  const daMeta = (v, meta) => (meta ? (v / meta * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '% da meta' : '');
+  const valorHora = (rec) => { const v = S.valores[rec]; return v && v.valor != null && v.valor !== '' ? Number(v.valor) : null; };
+  function calcular(regs) {
+    const atv = [], dia = [], par = [], ins = {}, equipes = [];
+    for (const r of regs) {
+      for (const a of r.atividades || []) {
+        const ref = atividadeDe(a.atividade);
+        const tarifa = a.tarifa != null && a.tarifa !== '' ? Number(a.tarifa) : (ref ? ref.tarifa : null);
+        const q = Number(a.hectares) || 0;
+        atv.push(Object.assign({}, a, { reg: r, tarifa, q, un: unidade(a.atividade), valor: tarifa != null ? tarifa * q : null }));
+        for (const i of a.insumos || []) ins[i.insumo] = (ins[i.insumo] || 0) + (Number(i.quantidade) || 0);
+      }
+      for (const d of r.diarias || []) {
+        const qt = Number(d.quantidade) || 1, mb = minutos(d.hora_inicio, d.hora_fim), ml = minLiquidos(d.hora_inicio, d.hora_fim), vh = valorHora(d.recurso);
+        dia.push(Object.assign({}, d, { reg: r, qt, mb, ml, horas: ml / 60 * qt, vh, valor: vh != null ? vh * ml / 60 * qt : null }));
+      }
+      for (const p of r.paradas || []) {
+        const qt = Number(p.quantidade) || 1, mb = minutos(p.hora_inicio, p.hora_fim), ml = mb, vh = valorHora(p.recurso);   // parada: tempo de relógio (sem desconto de almoço)
+        par.push(Object.assign({}, p, { reg: r, qt, mb, ml, horas: ml / 60 * qt, vh, valor: vh != null ? vh * ml / 60 * qt : null }));
+      }
+      if (r.tipo === 'apontamento') equipes.push(r);
+    }
+    const soma = (l, k) => l.reduce((s, x) => s + (Number(x[k]) || 0), 0);
+    const sem = soma(atv, 'valor'), vd = soma(dia, 'valor');
+    const porChave = (l, k) => { const o = {}; l.forEach((x) => { const c = x[k] || '—'; o[c] = o[c] || { horas: 0, valor: 0, n: 0, min: 0 }; o[c].horas += x.horas; o[c].valor += Number(x.valor) || 0; o[c].n += x.qt; o[c].min += x.mb; }); return o; };
+    return {
+      atv, dia, par, ins, equipes, sem, vd, com: sem + vd, meta: metaDia(),
+      dCom: metaDia() != null ? sem + vd - metaDia() : null, dSem: metaDia() != null ? sem - metaDia() : null,
+      ha: soma(atv.filter((a) => a.un === 'ha'), 'q'), hAtv: soma(atv.filter((a) => a.un === 'h'), 'q'),
+      hDia: soma(dia, 'horas'), hPar: soma(par, 'horas'), impacto: soma(par, 'valor'),
+      diaPorRec: porChave(dia, 'recurso'), parPorMot: porChave(par, 'motivo'), parPorRec: porChave(par, 'recurso'),
+      faltaValor: [...new Set(dia.filter((d) => d.vh == null).map((d) => d.recurso))],
+      faltaValorPar: [...new Set(par.filter((d) => d.vh == null).map((d) => d.recurso))],
+      semTarifa: [...new Set(atv.filter((a) => a.tarifa == null).map((a) => a.atividade))],
+    };
+  }
+  const deDia = (d) => visao().filter((x) => dia10(x.data) === d);
+  const TIPO = { apontamento: 'Apontamento', diarias: 'Diárias', paradas: 'Horas paradas' };
+  const ICONE = { apontamento: 'apont', diarias: 'diaria', paradas: 'parada' };
+  function tituloReg(r) {
+    if (r.tipo === 'apontamento') return r.equipe || 'Apontamento';
+    if (r.tipo === 'diarias') return (r.diarias || []).length === 1 ? 'Diária' : `${(r.diarias || []).length} diárias`;
+    return (r.paradas || []).length === 1 ? 'Hora parada' : `${(r.paradas || []).length} horas paradas`;
+  }
+  function resumoReg(r) {
+    const c = calcular([r]); const p = [];
+    if (c.atv.length) p.push(plural(c.atv.length, 'atividade', 'atividades') + (c.ha ? ` · ${num(c.ha)} ha` : ''));
+    if (r.tipo === 'diarias') p.push(...Object.entries(c.diaPorRec).map(([k, v]) => `${k} · ${horasTxt(v.horas)}`));
+    else if (c.dia.length) p.push(`${plural(c.dia.length, 'diária', 'diárias')} · ${horasTxt(c.hDia)}`);
+    if (r.tipo === 'paradas') p.push(...Object.entries(c.parPorMot).map(([k, v]) => `${k} · ${duracao(v.min)}`));
+    else if (c.par.length) p.push(`${plural(c.par.length, 'parada', 'paradas')} · ${duracao(c.par.reduce((s, x) => s + x.mb, 0))}`);
+    return p.join(' · ');
+  }
+  const etiquetaFila = (x) => (x._erro ? '<span class="st erro">Recusado</span>' : x._fila ? `<span class="st fila">${ic('nuvem', 14)} Na fila</span>` : '');
+
+  // =========================================================
+  //   Início: atalhos + cartões dos dias
   // =========================================================
   function vHome(view) {
-    const v = visao(); const hj = hoje();
-    const deHoje = (l) => l.filter((x) => String(x.data).slice(0, 10) === hj).length;
-    const minParadoHoje = v.paradas.filter((x) => String(x.data).slice(0, 10) === hj).reduce((s, x) => s + minutos(hhmm(x.hora_inicio), hhmm(x.hora_fim)), 0);
-    const f = fila(); const comErro = f.filter((x) => x.erro).length;
+    const v = visao(); const comErro = fila().filter((x) => x.erro).length;
+    const dias = [...new Set(v.map((x) => dia10(x.data)))].sort().reverse();
+    const mostrar = dias.slice(0, S.nDias);
     view.innerHTML = `
       <div class="ola"><p class="muted">${h(new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' }))}</p>
         <h1>Olá, ${h(S.user.nome.split(' ')[0])}</h1><p class="muted">${h(S.user.cdc)}</p></div>
-      ${comErro ? `<a class="alert alert-erro" href="#/lancamentos">${comErro} lançamento(s) recusado(s). Toque para ver.</a>` : ''}
-      <div class="hoje">
-        <div><b>${deHoje(v.apontamentos)}</b><span>${deHoje(v.apontamentos) === 1 ? 'apontamento' : 'apontamentos'} hoje</span></div>
-        <div><b>${deHoje(v.diarias)}</b><span>${deHoje(v.diarias) === 1 ? 'diária' : 'diárias'} hoje</span></div>
-        <div><b>${minParadoHoje ? duracao(minParadoHoje) : '0'}</b><span>parado hoje</span></div>
-      </div>
+      ${comErro ? `<p class="alert alert-erro">${comErro} lançamento(s) recusado(s) pelo servidor. Abra o lançamento marcado como "Recusado" para corrigir.</p>` : ''}
       <nav class="atalhos" aria-label="Lançar">
-        <a class="atalho a1" href="#/apontamento"><span class="ico">${ic('apont', 30)}</span><b>Apontamento</b><small>Equipe, estrutura do dia, local, diárias, insumos e paradas</small></a>
-        <a class="atalho a2" href="#/diaria"><span class="ico">${ic('diaria', 30)}</span><b>Diárias</b><small>Serviço por diária com horário</small></a>
-        <a class="atalho a3" href="#/parada"><span class="ico">${ic('parada', 30)}</span><b>Horas Paradas</b><small>Motivo e horário da parada</small></a>
-        <a class="atalho a4" href="#/lancamentos"><span class="ico">${ic('lista', 30)}</span><b>Meus lançamentos</b><small>Ver tudo o que você lançou</small></a>
+        <a class="atalho a1" href="#/apontamento"><span class="ico">${ic('apont', 30)}</span><b>Apontamento</b><small>Equipe, atividades, diárias, insumos e paradas</small></a>
+        <a class="atalho a2" href="#/diarias"><span class="ico">${ic('diaria', 30)}</span><b>Diárias</b><small>Uma ou várias diárias com horário</small></a>
+        <a class="atalho a3" href="#/paradas"><span class="ico">${ic('parada', 30)}</span><b>Horas Paradas</b><small>Motivo, tipo e horário da parada</small></a>
+        <a class="atalho a4" href="#/valores"><span class="ico">${ic('valor', 30)}</span><b>Valores</b><small>Valor por hora das diárias e tarifas</small></a>
       </nav>
-      ${S.base.em ? '' : '<p class="alert alert-warn">Ainda não consegui ler as planilhas de equipes, fazendas e insumos. Conecte-se à internet.</p>'}`;
+      ${S.base.em ? '' : '<p class="alert alert-warn">Ainda não consegui ler as planilhas de equipes, fazendas, insumos e atividades. Conecte-se à internet.</p>'}
+      <h2 class="sec-tit">Meus lançamentos</h2>
+      ${mostrar.length ? mostrar.map((d) => cartaoDia(d, v.filter((x) => dia10(x.data) === d))).join('')
+        : '<div class="empty"><strong>Nenhum lançamento ainda</strong>Use os botões acima para lançar o seu primeiro apontamento.</div>'}
+      ${dias.length > S.nDias || mostrar.length ? `<button class="btn btn-ghost btn-block" id="mais-dias">Mostrar dias anteriores</button>` : ''}`;
+    $$('[data-reg]', view).forEach((b) => (b.onclick = () => detalhe(b.dataset.reg)));
+    $$('[data-editar]', view).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); editar(b.dataset.editar); }));
+    $$('[data-pdf]', view).forEach((b) => (b.onclick = () => gerarPDF(b.dataset.pdf)));
+    $$('[data-whats]', view).forEach((b) => (b.onclick = () => compartilhar(b.dataset.whats)));
+    const mais = $('#mais-dias', view);
+    if (mais) mais.onclick = async () => {
+      if (dias.length > S.nDias) { S.nDias += 5; return render(true); }
+      if (!navigator.onLine) return toast('Sem internet para buscar dias anteriores.');
+      mais.disabled = true; mais.textContent = 'Buscando…';
+      const antes = dias.length; S.janela += 120; await carregarDados();
+      const agora = new Set(visao().map((x) => dia10(x.data))).size;
+      if (agora > antes) S.nDias += 5; else toast('Não há lançamentos mais antigos.');
+      render(true);
+    };
+  }
+  function cartaoDia(d, regs) {
+    const c = calcular(regs); const ehHoje = d === hoje();
+    const alertas = [];
+    if (c.faltaValor.length) alertas.push(`<a href="#/valores">Cadastre o valor/hora de ${h(c.faltaValor.join(', '))}</a> para calcular as diárias.`);
+    if (c.semTarifa.length) alertas.push(`Sem tarifa na planilha: ${h(c.semTarifa.join(', '))}.`);
+    const prod = [c.ha ? `<b>${num(c.ha)}</b> ha` : '', c.hAtv ? `<b>${num(c.hAtv)}</b> h de atividade` : '', c.dia.length ? `<b>${horasTxt(c.hDia)}</b> de diárias` : '', c.par.length ? `<b>${horasTxt(c.hPar)}</b> paradas` : ''].filter(Boolean);
+    return `<article class="dia-card">
+      <header class="dc-head"><div><h3>${dataBR(d)} <span>${diaSemana(d)}</span>${ehHoje ? '<em class="hj">Hoje</em>' : ''}</h3>
+        <p class="dc-prod">${prod.join(' · ') || 'Sem produção lançada'}</p></div></header>
+      ${c.atv.length || c.dia.length ? `<div class="fat">
+        <div class="meta"><span>Meta</span>${c.meta != null ? `<b>${brl(c.meta)}</b>` : '<a href="#/valores">Cadastrar meta</a>'}</div>
+        <div class="${c.dCom == null ? '' : c.dCom >= 0 ? 'pos' : 'neg'}"><span>Com diárias</span><b>${brl(c.com)}</b>${c.dCom != null ? `<small class="dl">Δ ${sinal(c.dCom)}</small>` : ''}</div>
+        <div class="${c.dSem == null ? '' : c.dSem >= 0 ? 'pos' : 'neg'}"><span>Sem diárias</span><b>${brl(c.sem)}</b>${c.dSem != null ? `<small class="dl">Δ ${sinal(c.dSem)}</small>` : ''}</div>
+      </div>` : ''}
+      ${alertas.length ? `<p class="dc-alerta">${alertas.join('<br>')}</p>` : ''}
+      <div class="dc-lista">${regs.map((r) => `<div class="dc-item">
+        <button class="dc-abrir" data-reg="${h(r.id)}"><span class="dc-ico t-${r.tipo}">${ic(ICONE[r.tipo], 18)}</span>
+          <span class="dc-txt"><span class="l-top"><b>${h(tituloReg(r))}</b>${etiquetaFila(r)}</span><small>${h(TIPO[r.tipo])}${resumoReg(r) ? ' · ' + h(resumoReg(r)) : ''}</small></span></button>
+        <button class="icon-btn dc-ed" data-editar="${h(r.id)}" aria-label="Editar ${h(tituloReg(r))}" title="Editar">${ic('editar', 19)}</button></div>`).join('')}</div>
+      <footer class="dc-acoes"><button class="btn btn-ghost btn-sm" data-pdf="${d}">${ic('pdf', 18)} Gerar PDF</button>
+        <button class="btn btn-ghost btn-sm" data-whats="${d}">${ic('whats', 18)} Copiar p/ WhatsApp</button></footer>
+    </article>`;
+  }
+  function editar(id) {
+    const r = registro(id); if (!r) return;
+    location.hash = `#/${r.tipo}?id=${encodeURIComponent(id)}`;
+  }
+
+  // Detalhe de um lançamento
+  function detalhe(id) {
+    const x = registro(id); if (!x) return;
+    const linha = (r, val) => (val == null || val === '' ? '' : `<div><dt>${h(r)}</dt><dd>${val}</dd></div>`);
+    const c = calcular([x]);
+    const estr = x.tipo !== 'apontamento' ? '' : (x.equipe_tipo === 'Mecanizado'
+      ? [['trator_medio', 'trator médio'], ['trator_pesado', 'trator pesado'], ['caminhao', 'caminhão'], ['drone', 'drone']].filter(([k]) => x[k]).map(([k, t]) => `${x[k]} ${t}`).join(' · ')
+      : (x.colaboradores ? `${x.colaboradores} colaboradores · ${Math.max(0, x.colaboradores - (x.faltas || 0) - (x.ferias || 0))} presentes${x.faltas ? ` · ${x.faltas} falta(s)` : ''}${x.ferias ? ` · ${x.ferias} férias` : ''}` : ''));
+    const atvs = c.atv.map((a) => `<li><b>${h(a.atividade)}</b><br>${h(a.fazenda)} · UP ${h(a.up)} · <b>${num(a.q)} ${a.un}</b>${a.tarifa != null ? ` · ${brl(a.tarifa)}/${a.un} = <b>${brl(a.valor)}</b>` : ''}
+      ${(a.insumos || []).length ? `<br><small>Insumos: ${a.insumos.map((i) => `${h(i.insumo)} ${num(i.quantidade, 3)}`).join(' · ')}</small>` : ''}</li>`).join('');
+    const dias = c.dia.map((d) => `<li><b>${h(d.recurso)}${d.qt > 1 ? ' × ' + d.qt : ''}</b> · ${h(d.diaria)}<br>${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)} · ${duracao(d.ml)}${d.ml !== d.mb ? ' (desc. almoço)' : ''} · ${h(d.fazenda)} UP ${h(d.up)}${d.valor != null ? ` · <b>${brl(d.valor)}</b>` : ''}</li>`).join('');
+    const pars = c.par.map((p) => `<li><b>${h(p.recurso)}${p.qt > 1 ? ' × ' + p.qt : ''}</b> · ${h(p.motivo)}<br>${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)} · ${duracao(p.mb)} · ${h(p.fazenda)} UP ${h(p.up)}</li>`).join('');
+    const fotos = (x.fotos || []);
+    const d = dialogo(`<div class="dlg"><div class="dlg-head"><h2>${h(TIPO[x.tipo])} · ${dataBR(x.data)}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
+      ${x._erro ? `<div class="alert alert-erro">O servidor recusou este lançamento: ${h(x._erro)}<br>Toque em Editar para corrigir.</div>` : x._fila ? '<div class="alert alert-warn">Ainda não foi enviado: será enviado quando houver internet.</div>' : ''}
+      <dl class="det">${linha('Equipe', x.equipe ? h(x.equipe) + (x.equipe_tipo ? ` <small>(${h(x.equipe_tipo)})</small>` : '') : '')}${linha('Estrutura', h(estr))}
+        ${linha('Atividades', atvs ? `<ul class="det-l">${atvs}</ul>` : '')}${linha('Diárias', dias ? `<ul class="det-l">${dias}</ul>` : '')}
+        ${linha('Horas paradas', pars ? `<ul class="det-l">${pars}</ul>` : '')}${linha('Observação', h(x.observacao))}
+        ${linha('Fotos', fotos.length ? `<div class="fotos mini">${fotos.map((f) => `<button class="foto" data-ver="${h(f.path)}" title="${f.tipo === 'equipe' ? 'Foto da equipe' : 'Foto da observação'}"><img alt="" data-path="${h(f.path)}"><span>${f.tipo === 'equipe' ? 'Equipe' : 'Obs.'}</span></button>`).join('')}</div>` : '')}</dl>
+      <div class="dlg-foot"><button class="btn btn-ghost btn-perigo-txt" data-del>${ic('lixo', 18)} ${x._fila && !S.regs.some((y) => y.id === x.id) ? 'Descartar' : 'Excluir'}</button>
+        <button class="btn" data-ed>${ic('editar', 18)} Editar</button></div></div>`);
+    hidratarFotos(d);
+    $('[data-x]', d).onclick = () => d.close();
+    $$('[data-ver]', d).forEach((b) => (b.onclick = () => verFoto(b.dataset.ver)));
+    $('[data-ed]', d).onclick = () => { d.close(); editar(x.id); };
+    $('[data-del]', d).onclick = async () => {
+      if (!(await confirmar('Excluir este lançamento?', 'Não dá para desfazer. As fotos dele também são apagadas.', 'Excluir', true))) return;
+      const noServidor = S.regs.some((y) => y.id === x.id);
+      if (noServidor && !navigator.onLine) return toast('Para excluir um lançamento já enviado é preciso internet.', 'erro');
+      try {
+        if (noServidor) { await sessao(); await rpc('pgo_excluir_registro', { p_id: x.id }); }
+        const item = fila().find((y) => y.dados.id === x.id);
+        salvarFila(fila().filter((y) => y.dados.id !== x.id));
+        apagarArquivos([...(x.fotos || []).map((f) => f.path), ...((item && item.remover) || [])]);
+        if (noServidor) await carregarDados(); else S.regs = S.regs.filter((y) => y.id !== x.id);
+        d.close(); barra(); toast('Lançamento excluído.'); render(true);
+      } catch (e) { toast(msgErro(e), 'erro'); }
+    };
   }
 
   // =========================================================
   //   Componentes de formulário
   // =========================================================
-  // Escolher de uma lista com barra de pesquisa
   function escolher(titulo, itens, atual) {   // itens: [{v, t, sub}]
     return new Promise((res) => {
       const d = dialogo(`<div class="dlg escolha"><div class="dlg-head"><h2>${h(titulo)}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
@@ -406,316 +626,548 @@
     <div class="cont"><button type="button" class="icon-btn" data-menos="${id}" aria-label="Diminuir ${h(rotulo)}">${ic('minus', 20)}</button>
     <input id="${id}" class="input" inputmode="numeric" value="${valor == null ? '' : h(valor)}" placeholder="0">
     <button type="button" class="icon-btn" data-mais="${id}" aria-label="Aumentar ${h(rotulo)}">${ic('plus', 20)}</button></div></div>`;
-  function ligarContadores(raiz, aoMudar) {
+  function ligarContadores(raiz, aoMudar, minimo) {
     $$('[data-mais],[data-menos]', raiz).forEach((b) => (b.onclick = () => {
       const i = $('#' + (b.dataset.mais || b.dataset.menos), raiz); const v = parseInt(i.value, 10) || 0;
-      i.value = Math.max(0, v + (b.dataset.mais ? 1 : -1)); i.dispatchEvent(new Event('input', { bubbles: true })); aoMudar && aoMudar();
+      i.value = Math.max(minimo || 0, v + (b.dataset.mais ? 1 : -1)); i.dispatchEvent(new Event('input', { bubbles: true })); aoMudar && aoMudar();
     }));
   }
   const intDe = (raiz, id) => { const t = String($('#' + id, raiz)?.value || '').trim(); if (!t) return null; const n = Number(t.replace(',', '.')); return Number.isInteger(n) && n >= 0 ? n : NaN; };
-  const horasHTML = (pfx, i, f) => `<div class="grid-2"><div class="field"><label for="${pfx}-hi">Hora de início</label><input id="${pfx}-hi" class="input" type="time" value="${h(i || '')}"></div>
-    <div class="field"><label for="${pfx}-hf">Hora final</label><input id="${pfx}-hf" class="input" type="time" value="${h(f || '')}"></div></div>
+  const horasHTML = (pfx, i, f) => `<div class="grid-2"><div class="field"><label for="${pfx}-hi">Hora de início</label><input id="${pfx}-hi" class="input" type="time" value="${h(hhmm(i))}"></div>
+    <div class="field"><label for="${pfx}-hf">Hora final</label><input id="${pfx}-hf" class="input" type="time" value="${h(hhmm(f))}"></div></div>
     <p class="dur" id="${pfx}-dur"></p>`;
-  function ligarHoras(raiz, pfx) {
-    const at = () => { const i = $('#' + pfx + '-hi', raiz).value, f = $('#' + pfx + '-hf', raiz).value; const el = $('#' + pfx + '-dur', raiz);
-      el.textContent = i && f && i !== f ? 'Duração: ' + duracao(minutos(i, f)) + (f < i ? ' (passa da meia-noite)' : '') : ''; };
+  function ligarHoras(raiz, pfx, o, almoco) {
+    const at = () => {
+      const i = $('#' + pfx + '-hi', raiz).value, f = $('#' + pfx + '-hf', raiz).value; o.hora_inicio = i; o.hora_fim = f;
+      const el = $('#' + pfx + '-dur', raiz); if (!(i && f && i !== f)) { el.textContent = ''; return; }
+      const m = minutos(i, f), ml = minLiquidos(i, f);
+      el.textContent = 'Duração: ' + duracao(m) + (f < i ? ' (passa da meia-noite)' : '') + (almoco && ml !== m ? ` · trabalhadas ${duracao(ml)} (desconta o almoço 11h–12h)` : '');
+    };
     $('#' + pfx + '-hi', raiz).addEventListener('input', at); $('#' + pfx + '-hf', raiz).addEventListener('input', at); at();
   }
   function conferirHoras(i, f, pre) {
-    if (!i) return `${pre}Informe a hora de início.`;
-    if (!f) return `${pre}Informe a hora final.`;
-    if (i === f) return `${pre}A hora final precisa ser diferente da inicial.`;
+    if (!i) return `${pre}informe a hora de início.`;
+    if (!f) return `${pre}informe a hora final.`;
+    if (i === f) return `${pre}a hora final precisa ser diferente da inicial.`;
     return null;
   }
-  async function concluir(form, tipo, dados, msgOk) {
-    const bt = $('button[type="submit"], .btn-salvar', form); bt.disabled = true; const txt = bt.innerHTML; bt.textContent = 'Salvando…';
+  // Tipo do recurso (colaborador, trator médio, trator pesado, caminhão)
+  const recursoHTML = (pfx, atual) => `<div class="field"><span class="label" id="${pfx}-rec-l">Tipo</span>
+    <div class="seg" role="group" aria-labelledby="${pfx}-rec-l" id="${pfx}-rec">${RECURSOS.map((r) => `<button type="button" data-rec="${h(r)}" aria-pressed="${r === atual}">${h(r)}</button>`).join('')}</div></div>`;
+  function ligarRecurso(raiz, pfx, o, aoMudar) {
+    $$('#' + pfx + '-rec [data-rec]', raiz).forEach((b) => (b.onclick = () => {
+      o.recurso = b.dataset.rec; $$('#' + pfx + '-rec [data-rec]', raiz).forEach((x) => x.setAttribute('aria-pressed', String(x === b))); aoMudar && aoMudar();
+    }));
+  }
+
+  // Fotos: lista = [{path, tipo, blob?, url?}] — as novas só vão para o aparelho ao salvar
+  const fotosHTML = (id, titulo, dica) => `<div class="fotos-campo"><div class="sec-head"><span class="label">${h(titulo)}</span>
+    <label class="btn btn-ghost btn-sm foto-add">${ic('camera', 18)} Adicionar foto<input type="file" accept="image/*" multiple id="${id}-in" class="sr-only"></label></div>
+    ${dica ? `<p class="muted small">${h(dica)}</p>` : ''}<div class="fotos" id="${id}"></div></div>`;
+  function ligarFotos(raiz, id, lista, tipo, aoMudar) {
+    const box = $('#' + id, raiz);
+    const desenhar = () => {
+      box.innerHTML = lista.filter((f) => f.tipo === tipo).map((f) => `<div class="foto"><img alt="" data-path="${h(f.path)}" ${f.url ? `src="${f.url}"` : ''}>
+        <button type="button" class="foto-x" data-rm="${h(f.path)}" aria-label="Remover foto">${ic('x', 16)}</button></div>`).join('');
+      hidratarFotos(box);
+      $$('[data-rm]', box).forEach((b) => (b.onclick = () => { const k = lista.findIndex((f) => f.path === b.dataset.rm); if (k >= 0) { lista.splice(k, 1); desenhar(); aoMudar && aoMudar(); } }));
+    };
+    $('#' + id + '-in', raiz).onchange = async (e) => {
+      const arqs = Array.from(e.target.files || []); e.target.value = '';
+      for (const a of arqs) {
+        try { const blob = await reduzirFoto(a); lista.push({ path: `${S.user.id}/${uuid()}.jpg`, tipo, blob, url: URL.createObjectURL(blob) }); }
+        catch (_) { toast('Não consegui ler uma das fotos.', 'erro'); }
+      }
+      desenhar(); aoMudar && aoMudar();
+    };
+    desenhar();
+  }
+
+  // Lista de itens que recolhem em cartões pequenos (atividades, diárias, paradas)
+  function listaItens(raiz, sel, cfg) {
+    const st = { aberto: cfg.aberto == null ? -1 : cfg.aberto };
+    const box = $(sel, raiz);
+    const rolar = () => { const el = $('.item.aberto', box); if (el) el.scrollIntoView({ block: 'nearest' }); };
+    const desenhar = () => {
+      const it = cfg.itens;
+      box.innerHTML = (it.length ? it.map((x, i) => (i === st.aberto
+        ? `<div class="item aberto"><div class="item-head"><b>${h(cfg.rotulo)} ${i + 1}</b><span class="item-acoes">
+             <button type="button" class="btn btn-ghost btn-sm" data-ok>${ic('baixo', 16)} Recolher</button>
+             <button type="button" class="icon-btn" data-rm aria-label="Remover ${h(cfg.rotulo.toLowerCase())} ${i + 1}">${ic('lixo', 18)}</button></span></div>${cfg.corpo(x, i)}</div>`
+        : `<button type="button" class="item-mini ${cfg.completo(x) ? '' : 'inc'}" data-abrir="${i}" aria-label="Abrir ${h(cfg.rotulo.toLowerCase())} ${i + 1}"><span class="n">${i + 1}</span>
+             <span class="t">${cfg.resumo(x)}${cfg.completo(x) ? '' : '<em>Incompleto</em>'}</span>${ic('editar', 17)}</button>`)).join('')
+        : `<p class="muted small">${cfg.vazio}</p>`) + `<button type="button" class="btn btn-ghost btn-add" data-add>${ic('plus', 18)} ${h(cfg.textoAdd(it.length))}</button>`;
+      if (st.aberto >= 0 && it[st.aberto]) cfg.ligar(it[st.aberto], st.aberto, box);
+      $$('[data-abrir]', box).forEach((b) => (b.onclick = () => { st.aberto = +b.dataset.abrir; desenhar(); rolar(); }));
+      const ok = $('[data-ok]', box); if (ok) ok.onclick = () => { st.aberto = -1; desenhar(); };
+      const rm = $('[data-rm]', box);
+      if (rm) rm.onclick = async () => {
+        const x = it[st.aberto];
+        if (cfg.resumoTexto(x) && !(await confirmar(`Remover ${cfg.rotulo.toLowerCase()} ${st.aberto + 1}?`, h(cfg.resumoTexto(x)), 'Remover', true))) return;
+        it.splice(st.aberto, 1); st.aberto = -1; desenhar(); cfg.mudou && cfg.mudou();
+      };
+      $('[data-add]', box).onclick = () => { it.push(cfg.novo()); st.aberto = it.length - 1; desenhar(); cfg.mudou && cfg.mudou(); rolar(); };
+    };
+    desenhar();
+    return { desenhar, abrir(i) { st.aberto = i; desenhar(); rolar(); } };
+  }
+
+  // ----- Atividade -----
+  const novaAtividade = (fz) => ({ atividade: '', regime: '', tarifa: null, fazenda: fz || '', up: '', hectares: '', insumos: [] });
+  const atvCompleta = (a) => !!(a.atividade && a.fazenda && a.up && lerNum(a.hectares) > 0 && (a.insumos || []).every((i) => i.insumo && lerNum(i.quantidade) > 0));
+  const atvResumoTxt = (a) => [a.atividade, a.fazenda && `${a.fazenda}${a.up ? ' UP ' + a.up : ''}`, lerNum(a.hectares) > 0 && `${num(lerNum(a.hectares))} ${unidade(a.atividade)}`].filter(Boolean).join(' · ');
+  const atvResumo = (a) => `<b>${h(a.atividade || 'Atividade sem nome')}</b><small>${h([a.fazenda && `${a.fazenda}${a.up ? ' · UP ' + a.up : ''}`, lerNum(a.hectares) > 0 && `${num(lerNum(a.hectares))} ${unidade(a.atividade)}`, (a.insumos || []).length && plural(a.insumos.length, 'insumo', 'insumos')].filter(Boolean).join(' · ') || 'Toque para preencher')}</small>`;
+  function atvCorpo(a, i) {
+    const un = unidade(a.atividade); const ref = a.atividade ? atividadeDe(a.atividade) : null; const tar = a.tarifa != null ? a.tarifa : ref && ref.tarifa;
+    return `${campoEscolha(`at${i}-atv`, 'Atividade', a.atividade, atividades().length ? 'Escolher atividade' : 'Planilha de atividades vazia', a.atividade ? [a.regime, tar != null ? brl(tar) + '/' + un : 'sem tarifa'].filter(Boolean).join(' · ') : '')}
+      <div id="at${i}-local"></div>
+      <div class="field campo-ha"><label for="at${i}-ha">${un === 'h' ? 'Horas realizadas' : 'Hectares realizados'}</label>
+        <div class="com-unid"><input id="at${i}-ha" class="input" inputmode="decimal" value="${h(numCampo(lerNum(a.hectares)))}" placeholder="0"><span>${un}</span></div>
+        ${a.fazenda && a.up && areaDe(a.fazenda, a.up) != null ? `<span class="hint">Área do talhão: ${num(areaDe(a.fazenda, a.up))} ha</span>` : ''}</div>
+      <div class="sub-ins"><div class="sec-head"><span class="label">Insumos desta atividade</span><button type="button" class="btn btn-ghost btn-sm" id="at${i}-add-in">${ic('plus', 18)} Insumo</button></div>
+        <div id="at${i}-ins" class="itens"></div></div>`;
+  }
+  function atvLigar(a, i, box, ctx) {
+    $(`#at${i}-atv`, box).onclick = async () => {
+      const v = await escolher('Atividade', atividades().map((x) => ({ v: x.atividade, t: x.atividade, sub: [x.regime, x.tarifa != null ? brl(x.tarifa) + '/' + unidade(x.atividade) : 'sem tarifa'].filter(Boolean).join(' · ') })), a.atividade);
+      if (v != null && v !== a.atividade) { const r = atividadeDe(v); a.atividade = v; a.regime = r ? r.regime : ''; a.tarifa = r ? r.tarifa : null; ctx.mudou(); ctx.redesenhar(); }
+    };
+    ligarLocal(box, `at${i}`, a, () => { ctx.mudou(); ctx.redesenhar(); });
+    $(`#at${i}-ha`, box).oninput = (e) => { a.hectares = e.target.value; };
+    const lista = insumos();
+    const desenharIns = () => {
+      const el = $(`#at${i}-ins`, box);
+      el.innerHTML = a.insumos.length ? a.insumos.map((x, k) => `<div class="linha-in">
+        <div class="field"><label for="at${i}-in${k}-n">Insumo</label><select id="at${i}-in${k}-n" class="input"><option value="">Selecione</option>${[...new Set([...lista, x.insumo].filter(Boolean))].map((n) => `<option ${n === x.insumo ? 'selected' : ''}>${h(n)}</option>`).join('')}</select></div>
+        <div class="field"><label for="at${i}-in${k}-q">Quantidade</label><input id="at${i}-in${k}-q" class="input" inputmode="decimal" value="${h(numCampo(lerNum(x.quantidade)))}" placeholder="0"></div>
+        <button type="button" class="icon-btn" data-rm-in="${k}" aria-label="Remover insumo ${k + 1}">${ic('lixo', 18)}</button></div>`).join('')
+        : `<p class="muted small">Nenhum insumo.${lista.length ? '' : ' (A planilha de insumos não tem itens para o seu CDC.)'}</p>`;
+      a.insumos.forEach((x, k) => { $(`#at${i}-in${k}-n`, box).onchange = (e) => { x.insumo = e.target.value; }; $(`#at${i}-in${k}-q`, box).oninput = (e) => { x.quantidade = e.target.value; }; });
+      $$('[data-rm-in]', el).forEach((b) => (b.onclick = () => { a.insumos.splice(+b.dataset.rmIn, 1); desenharIns(); ctx.mudou(); }));
+    };
+    $(`#at${i}-add-in`, box).onclick = () => { a.insumos.push({ insumo: '', quantidade: '' }); desenharIns(); ctx.mudou(); $(`#at${i}-in${a.insumos.length - 1}-n`, box).focus(); };
+    desenharIns();
+  }
+
+  // ----- Diária -----
+  const novaDiaria = (fz) => ({ recurso: '', quantidade: 1, fazenda: fz || '', up: '', diaria: '', hora_inicio: '', hora_fim: '' });
+  const diaCompleta = (d) => !!(d.recurso && d.fazenda && d.up && String(d.diaria || '').trim() && d.hora_inicio && d.hora_fim && d.hora_inicio !== d.hora_fim);
+  const diaResumoTxt = (d) => [d.recurso && `${d.recurso}${d.quantidade > 1 ? ' × ' + d.quantidade : ''}`, d.diaria, d.hora_inicio && d.hora_fim && `${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)}`].filter(Boolean).join(' · ');
+  const diaResumo = (d) => `<b>${h([d.recurso && `${d.recurso}${d.quantidade > 1 ? ' × ' + d.quantidade : ''}`, d.diaria].filter(Boolean).join(' · ') || 'Diária sem dados')}</b>
+    <small>${h([d.hora_inicio && d.hora_fim && `${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)} (${duracao(minLiquidos(d.hora_inicio, d.hora_fim))})`, d.fazenda && `${d.fazenda}${d.up ? ' · UP ' + d.up : ''}`].filter(Boolean).join(' · ') || 'Toque para preencher')}</small>`;
+  const diaCorpo = (d, i) => `${recursoHTML('di' + i, d.recurso)}
+    <div class="grid-qt">${contador(`di${i}-qt`, 'Quantidade', d.quantidade || 1)}
+      <div class="field"><label for="di${i}-txt">Diária</label><input id="di${i}-txt" class="input" value="${h(d.diaria || '')}" placeholder="Ex.: limpeza de aceiro, roçada manual"></div></div>
+    <div id="di${i}-local"></div>
+    ${horasHTML('di' + i, d.hora_inicio, d.hora_fim)}`;
+  function diaLigar(d, i, box, ctx) {
+    ligarRecurso(box, 'di' + i, d, ctx.mudou);
+    $(`#di${i}-qt`, box).addEventListener('input', (e) => { d.quantidade = parseInt(e.target.value, 10) || ''; });
+    ligarContadores($(`#di${i}-qt`, box).closest('.contador'), null, 1);
+    $(`#di${i}-txt`, box).oninput = (e) => { d.diaria = e.target.value; };
+    ligarLocal(box, 'di' + i, d, ctx.mudou);
+    ligarHoras(box, 'di' + i, d, true);
+  }
+
+  // ----- Hora parada -----
+  const novaParada = (fz) => ({ recurso: '', quantidade: 1, fazenda: fz || '', up: '', motivo: '', hora_inicio: '', hora_fim: '' });
+  const parCompleta = (p) => !!(p.recurso && p.fazenda && p.up && p.motivo && p.hora_inicio && p.hora_fim && p.hora_inicio !== p.hora_fim);
+  const parResumoTxt = (p) => [p.recurso && `${p.recurso}${p.quantidade > 1 ? ' × ' + p.quantidade : ''}`, p.motivo, p.hora_inicio && p.hora_fim && `${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)}`].filter(Boolean).join(' · ');
+  const parResumo = (p) => `<b>${h([p.motivo, p.recurso && `${p.recurso}${p.quantidade > 1 ? ' × ' + p.quantidade : ''}`].filter(Boolean).join(' · ') || 'Parada sem dados')}</b>
+    <small>${h([p.hora_inicio && p.hora_fim && `${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)} (${duracao(minutos(p.hora_inicio, p.hora_fim))})`, p.fazenda && `${p.fazenda}${p.up ? ' · UP ' + p.up : ''}`].filter(Boolean).join(' · ') || 'Toque para preencher')}</small>`;
+  const parCorpo = (p, i) => `${recursoHTML('pa' + i, p.recurso)}
+    <div class="grid-qt">${contador(`pa${i}-qt`, 'Quantidade', p.quantidade || 1)}
+      <div class="field"><label for="pa${i}-m">Motivo</label><select id="pa${i}-m" class="input"><option value="">Selecione</option>${[...new Set([...MOTIVOS, p.motivo].filter(Boolean))].map((m) => `<option ${m === p.motivo ? 'selected' : ''}>${h(m)}</option>`).join('')}</select></div></div>
+    <div id="pa${i}-local"></div>
+    ${horasHTML('pa' + i, p.hora_inicio, p.hora_fim)}`;
+  function parLigar(p, i, box, ctx) {
+    ligarRecurso(box, 'pa' + i, p, ctx.mudou);
+    $(`#pa${i}-qt`, box).addEventListener('input', (e) => { p.quantidade = parseInt(e.target.value, 10) || ''; });
+    ligarContadores($(`#pa${i}-qt`, box).closest('.contador'), null, 1);
+    $(`#pa${i}-m`, box).onchange = (e) => { p.motivo = e.target.value; };
+    ligarLocal(box, 'pa' + i, p, ctx.mudou);
+    ligarHoras(box, 'pa' + i, p, false);
+  }
+
+  // Validações dos itens (abre o cartão com problema e põe o foco no campo)
+  function validarItens(F, falha) {
+    for (let i = 0; i < F.atividades.length; i++) {
+      const a = F.atividades[i], pre = `Atividade ${i + 1}: `; const ir = (m, campo) => { F.L.atv.abrir(i); return falha(pre + m, campo && $(`#at${i}-${campo}`)); };
+      if (!a.atividade) return ir('escolha a atividade.', 'atv');
+      if (!a.fazenda) return ir('escolha a fazenda.', 'fz');
+      if (!a.up) return ir('escolha o talhão (UP).', 'up');
+      const q = lerNum(a.hectares); if (!(q > 0)) return ir(`informe ${unidade(a.atividade) === 'h' ? 'as horas realizadas' : 'os hectares realizados'} (maior que zero).`, 'ha');
+      for (let k = 0; k < a.insumos.length; k++) {
+        const x = a.insumos[k];
+        if (!x.insumo) return ir(`escolha o insumo ${k + 1}.`, `in${k}-n`);
+        if (!(lerNum(x.quantidade) > 0)) return ir(`informe a quantidade do insumo ${k + 1} (maior que zero).`, `in${k}-q`);
+      }
+    }
+    for (const [lista, nome, pfx, L] of [[F.diarias, 'Diária', 'di', F.L.dia], [F.paradas, 'Hora parada', 'pa', F.L.par]]) {
+      for (let i = 0; i < lista.length; i++) {
+        const d = lista[i], pre = `${nome} ${i + 1}: `; const ir = (m, campo) => { L.abrir(i); return falha(pre + m, campo && $(`#${pfx}${i}-${campo}`)); };
+        if (!d.recurso) return ir('escolha o tipo (colaborador, trator médio, trator pesado ou caminhão).', 'rec button');
+        if (!(parseInt(d.quantidade, 10) >= 1)) return ir('a quantidade precisa ser 1 ou mais.', 'qt');
+        if (pfx === 'di' && !String(d.diaria || '').trim()) return ir('escreva a diária.', 'txt');
+        if (pfx === 'pa' && !d.motivo) return ir('escolha o motivo.', 'm');
+        if (!d.fazenda) return ir('escolha a fazenda.', 'fz');
+        if (!d.up) return ir('escolha o talhão (UP).', 'up');
+        const eh = conferirHoras(d.hora_inicio, d.hora_fim, ''); if (eh) return ir(eh, 'hi');
+      }
+    }
+    return true;
+  }
+  const limparAtv = (a) => ({ atividade: a.atividade, regime: a.regime || null, tarifa: a.tarifa, fazenda: a.fazenda, up: a.up, area_ha: areaDe(a.fazenda, a.up), hectares: lerNum(a.hectares), insumos: a.insumos.map((x) => ({ insumo: x.insumo, quantidade: lerNum(x.quantidade) })) });
+  const limparDia = (d) => ({ recurso: d.recurso, quantidade: parseInt(d.quantidade, 10) || 1, fazenda: d.fazenda, up: d.up, diaria: String(d.diaria).trim(), hora_inicio: hhmm(d.hora_inicio), hora_fim: hhmm(d.hora_fim) });
+  const limparPar = (p) => ({ recurso: p.recurso, quantidade: parseInt(p.quantidade, 10) || 1, fazenda: p.fazenda, up: p.up, motivo: p.motivo, hora_inicio: hhmm(p.hora_inicio), hora_fim: hhmm(p.hora_fim) });
+
+  // Salvar (novo ou edição): fotos novas vão para o aparelho, o lançamento entra na fila e é enviado
+  async function guardar(form, F, dados, msgOk) {
+    const bt = $('.btn-salvar', form); bt.disabled = true; const txt = bt.innerHTML; bt.textContent = 'Salvando…';
+    const err = $('.form-error', form);
+    const novas = F.fotos.filter((f) => f.blob);
     try {
-      const chegou = await lancar(tipo, dados);
-      const recusado = fila().find((x) => x.dados.id === dados.id && x.erro);
-      if (recusado) {   // o servidor recusou: tira da fila e mostra o motivo no formulário
-        salvarFila(fila().filter((x) => x.dados.id !== dados.id));
-        bt.disabled = false; bt.innerHTML = txt; barra();
-        $('.form-error', form).textContent = recusado.erro; return;
+      for (const f of novas) await IDB.put(f.path, f.blob);
+      dados.fotos = F.fotos.map((f) => ({ path: f.path, tipo: f.tipo }));
+      const ficaram = new Set(dados.fotos.map((f) => f.path));
+      const anterior = fila().find((x) => x.dados.id === dados.id);
+      const remover = [...new Set([...F.fotosOriginais.filter((p) => !ficaram.has(p)), ...((anterior && anterior.remover) || [])])];
+      dados.criado_em = (F.original && F.original.criado_em) || new Date().toISOString();
+      salvarFila([...fila().filter((x) => x.dados.id !== dados.id), { dados, remover, criado: dados.criado_em }]);
+      for (const p of remover) IDB.del(p);
+      await enviarFila(true);
+      const it = fila().find((x) => x.dados.id === dados.id);
+      if (it && it.erro) {   // o servidor recusou: volta ao formulário com o motivo
+        salvarFila(anterior ? fila().map((x) => (x.dados.id === dados.id ? anterior : x)) : fila().filter((x) => x.dados.id !== dados.id));
+        for (const f of novas) IDB.del(f.path);
+        bt.disabled = false; bt.innerHTML = txt; barra(); err.textContent = it.erro; return;
       }
       delete form.dataset.sujo;
-      toast(chegou ? msgOk : 'Sem internet: o lançamento ficou guardado no aparelho e será enviado sozinho.', chegou ? 'in' : '', 6000);
+      toast(it ? (navigator.onLine ? 'Lançamento guardado no aparelho; o envio termina em instantes.' : 'Sem internet: o lançamento ficou guardado no aparelho e será enviado sozinho.') : msgOk, it ? '' : 'in', 6000);
       location.hash = '#/home';
-    } catch (e) { bt.disabled = false; bt.innerHTML = txt; $('.form-error', form).textContent = msgErro(e); }
+    } catch (e) { bt.disabled = false; bt.innerHTML = txt; err.textContent = msgErro(e); }
   }
+  // Estado inicial do formulário (novo ou edição)
+  function estadoForm(tipo) {
+    const id = paramRota('id'); const orig = id ? registro(id) : null;
+    if (id && !orig) { toast('Lançamento não encontrado.', 'erro'); location.hash = '#/home'; return null; }
+    const o = orig ? clonar(orig) : {};
+    const F = {
+      id: orig ? orig.id : uuid(), original: orig, tipo, data: dia10(o.data) || hoje(),
+      equipe: o.equipe || '', equipe_tipo: o.equipe_tipo || '', o,
+      atividades: (o.atividades || []).map((a) => Object.assign(novaAtividade(), a, { insumos: (a.insumos || []).map((x) => Object.assign({}, x)) })),
+      diarias: (o.diarias || []).map((d) => Object.assign(novaDiaria(), d, { hora_inicio: hhmm(d.hora_inicio), hora_fim: hhmm(d.hora_fim) })),
+      paradas: (o.paradas || []).map((p) => Object.assign(novaParada(), p, { hora_inicio: hhmm(p.hora_inicio), hora_fim: hhmm(p.hora_fim) })),
+      fotos: (o.fotos || []).map((f) => ({ path: f.path, tipo: f.tipo })), fotosOriginais: (o.fotos || []).map((f) => f.path),
+      observacao: o.observacao || '', L: {},
+    };
+    F.fazendaPadrao = () => ([...F.atividades, ...F.diarias, ...F.paradas].find((x) => x.fazenda) || {}).fazenda || '';
+    return F;
+  }
+  const rodapeForm = (F, rotulo) => `<section class="panel">
+      <div class="field"><label for="f-obs">Observação</label><textarea id="f-obs" class="input" placeholder="Algo importante sobre o dia">${h(F.observacao)}</textarea></div>
+      ${fotosHTML('f-fobs', 'Fotos da observação', 'Para justificar o que foi escrito (opcional).')}
+      <p class="form-error" role="alert"></p>
+      <button class="btn btn-block btn-salvar" type="submit">${h(rotulo)}</button>
+      ${F.original ? '<a class="btn btn-ghost btn-block" href="#/home">Cancelar edição</a>' : ''}
+    </section>`;
 
   // =========================================================
   //   Apontamento
   // =========================================================
   function vApontamento(view) {
-    const A = { fazenda: '', up: '', equipe: '', tipo: '', diarias: [], insumos: [], paradas: [] };
-    view.innerHTML = cabecalho('Apontamento', 'Lançamento do dia da equipe.') + `
+    const F = estadoForm('apontamento'); if (!F) return;
+    if (!F.original) F.atividades.push(novaAtividade());
+    const ed = !!F.original;
+    view.innerHTML = cabecalho(ed ? 'Editar apontamento' : 'Apontamento', ed ? `Lançado em ${dataBR(F.data)}. Altere o que precisar e salve.` : 'Lançamento do dia da equipe.') + `
       <form id="f-ap" class="stack" novalidate>
         <section class="panel">
-          <div class="grid-2 stack-sm"><div class="field"><label for="ap-data">Data</label><input id="ap-data" type="date" class="input" value="${hoje()}" max="${hoje()}"></div>
+          <div class="grid-2 stack-sm"><div class="field"><label for="f-data">Data</label><input id="f-data" type="date" class="input" value="${F.data}" max="${hoje()}"></div>
           <div id="ap-eq-box"></div></div>
         </section>
-        <section class="panel"><h2>Estrutura do dia</h2><div id="ap-estr"><p class="muted">Escolha a equipe para preencher a estrutura.</p></div></section>
-        <section class="panel"><h2>Local</h2><div id="ap-local"></div></section>
-        <section class="panel"><div class="sec-head"><h2>Diárias</h2><button type="button" class="btn btn-ghost btn-sm" id="ap-add-di">${ic('plus', 18)} Adicionar diária</button></div><div id="ap-di" class="itens"></div></section>
-        <section class="panel"><div class="sec-head"><h2>Insumos</h2><button type="button" class="btn btn-ghost btn-sm" id="ap-add-in">${ic('plus', 18)} Adicionar insumo</button></div><div id="ap-in" class="itens"></div></section>
-        <section class="panel"><div class="sec-head"><h2>Horas paradas</h2><button type="button" class="btn btn-ghost btn-sm" id="ap-add-pa">${ic('plus', 18)} Adicionar parada</button></div><div id="ap-pa" class="itens"></div></section>
-        <section class="panel">
-          <div class="field"><label for="ap-obs">Observação</label><textarea id="ap-obs" class="input" placeholder="Algo importante sobre o dia"></textarea></div>
-          <p class="form-error" role="alert"></p>
-          <button class="btn btn-block btn-salvar" type="submit">Salvar apontamento</button>
-        </section>
+        <section class="panel"><h2>Estrutura do dia</h2><div id="ap-estr"></div>
+          ${fotosHTML('f-feq', 'Foto da equipe', '')}</section>
+        <section class="panel"><h2>Atividades</h2><p class="muted small">A fazenda das próximas atividades vem igual à primeira; normalmente só muda o talhão.</p><div id="ap-atv" class="itens"></div></section>
+        <section class="panel"><h2>Diárias</h2><div id="ap-di" class="itens"></div></section>
+        <section class="panel"><h2>Horas paradas</h2><div id="ap-pa" class="itens"></div></section>
+        ${rodapeForm(F, ed ? 'Salvar alterações' : 'Salvar apontamento')}
       </form>`;
     const form = $('#f-ap', view);
     const sujo = () => { form.dataset.sujo = '1'; $('.form-error', form).textContent = ''; };
     form.addEventListener('input', sujo);
 
-    // Equipe
     const eqBox = () => {
-      const e = equipes().find((x) => x.equipe === A.equipe);
-      $('#ap-eq-box', view).innerHTML = campoEscolha('ap-eq', 'Equipe', A.equipe, equipes().length ? 'Escolher equipe' : 'Sem equipes para o seu CDC', e ? e.tipo : '');
+      const e = equipes().find((x) => x.equipe === F.equipe);
+      $('#ap-eq-box', view).innerHTML = campoEscolha('ap-eq', 'Equipe', F.equipe, equipes().length ? 'Escolher equipe' : 'Sem equipes para o seu CDC', e ? e.tipo : F.equipe_tipo);
       $('#ap-eq', view).onclick = async () => {
-        const v = await escolher('Equipe', equipes().map((x) => ({ v: x.equipe, t: x.equipe, sub: x.tipo })), A.equipe);
-        if (v != null) { const x = equipes().find((q) => q.equipe === v); A.equipe = v; A.tipo = x ? x.tipo : ''; eqBox(); estrutura(); sujo(); }
+        const v = await escolher('Equipe', equipes().map((x) => ({ v: x.equipe, t: x.equipe, sub: x.tipo })), F.equipe);
+        if (v != null) { const x = equipes().find((q) => q.equipe === v); const tipoAntes = F.equipe_tipo; F.equipe = v; F.equipe_tipo = x ? x.tipo : ''; eqBox(); if (tipoAntes !== F.equipe_tipo || !$('#ap-estr .contador', view)) estrutura(); sujo(); }
       };
     };
-    // Estrutura do dia: manual = pessoas; mecanizado = máquinas
     const estrutura = () => {
-      const el = $('#ap-estr', view);
-      if (!A.equipe) { el.innerHTML = '<p class="muted">Escolha a equipe para preencher a estrutura.</p>'; return; }
-      if (A.tipo === 'Mecanizado') {
+      const el = $('#ap-estr', view); const o = F.o;
+      if (!F.equipe) { el.innerHTML = '<p class="muted">Escolha a equipe para preencher a estrutura.</p>'; return; }
+      if (F.equipe_tipo === 'Mecanizado') {
         el.innerHTML = `<p class="muted small">Equipe mecanizada: quantidade de máquinas no dia.</p><div class="contadores">
-          ${contador('ap-tm', 'Trator médio')}${contador('ap-tp', 'Trator pesado')}${contador('ap-cam', 'Caminhão')}${contador('ap-dro', 'Drone')}</div>`;
-      } else {
-        el.innerHTML = `<p class="muted small">Equipe ${A.tipo === 'Manual' ? 'manual' : ''}: pessoas no dia.</p><div class="contadores">
-          ${contador('ap-col', 'Colaboradores')}${contador('ap-fal', 'Faltas')}${contador('ap-fer', 'Férias')}</div><p class="presentes" id="ap-pres"></p>`;
-        const pres = () => { const c = intDe(view, 'ap-col') || 0, f = intDe(view, 'ap-fal') || 0, r = intDe(view, 'ap-fer') || 0; const el2 = $('#ap-pres', view);
-          el2.textContent = c ? `Presentes: ${Math.max(0, c - f - r)} de ${c}` : ''; el2.classList.toggle('erro', f + r > c && c > 0); };
-        $$('#ap-col,#ap-fal,#ap-fer', view).forEach((i) => i.addEventListener('input', pres));
-        ligarContadores(el, pres); pres(); return;
+          ${contador('ap-tm', 'Trator médio', o.trator_medio)}${contador('ap-tp', 'Trator pesado', o.trator_pesado)}${contador('ap-cam', 'Caminhão', o.caminhao)}${contador('ap-dro', 'Drone', o.drone)}</div>`;
+        ligarContadores(el); return;
       }
-      ligarContadores(el);
+      el.innerHTML = `<p class="muted small">Equipe ${F.equipe_tipo === 'Manual' ? 'manual' : ''}: pessoas no dia.</p><div class="contadores">
+        ${contador('ap-col', 'Colaboradores', o.colaboradores)}${contador('ap-fal', 'Faltas', o.faltas)}${contador('ap-fer', 'Férias', o.ferias)}</div><p class="presentes" id="ap-pres"></p>`;
+      const pres = () => { const c = intDe(view, 'ap-col') || 0, f = intDe(view, 'ap-fal') || 0, r = intDe(view, 'ap-fer') || 0; const el2 = $('#ap-pres', view);
+        el2.textContent = c ? `Presentes: ${Math.max(0, c - f - r)} de ${c}` : ''; el2.classList.toggle('erro', f + r > c && c > 0); };
+      $$('#ap-col,#ap-fal,#ap-fer', view).forEach((i) => i.addEventListener('input', pres));
+      ligarContadores(el, pres); pres();
     };
-    // Local principal
-    ligarLocal(view, 'ap', A, () => { sujo(); });
+    eqBox(); estrutura();
+    ligarFotos(view, 'f-feq', F.fotos, 'equipe', sujo);
+    ligarFotos(view, 'f-fobs', F.fotos, 'obs', sujo);
 
-    // Diárias dentro do apontamento
-    const desenharDiarias = () => {
-      const box = $('#ap-di', view);
-      box.innerHTML = A.diarias.length ? A.diarias.map((d, i) => `<div class="item" data-i="${i}">
-        <div class="item-head"><b>Diária ${i + 1}</b><button type="button" class="icon-btn" data-rm-di="${i}" aria-label="Remover diária ${i + 1}">${ic('lixo', 18)}</button></div>
-        <div id="di${i}-local"></div>
-        <div class="field"><label for="di${i}-txt">Diária</label><input id="di${i}-txt" class="input" value="${h(d.diaria || '')}" placeholder="Ex.: limpeza de aceiro, roçada manual"></div>
-        ${horasHTML('di' + i, d.hora_inicio, d.hora_fim)}</div>`).join('') : '<p class="muted small">Nenhuma diária neste apontamento.</p>';
-      A.diarias.forEach((d, i) => {
-        ligarLocal(view, 'di' + i, d, sujo); ligarHoras(view, 'di' + i);
-        $('#di' + i + '-txt', view).oninput = (e) => { d.diaria = e.target.value; };
-        $('#di' + i + '-hi', view).addEventListener('input', (e) => { d.hora_inicio = e.target.value; });
-        $('#di' + i + '-hf', view).addEventListener('input', (e) => { d.hora_fim = e.target.value; });
-      });
-      $$('[data-rm-di]', view).forEach((b) => (b.onclick = () => { A.diarias.splice(+b.dataset.rmDi, 1); desenharDiarias(); sujo(); }));
-    };
-    $('#ap-add-di', view).onclick = () => { A.diarias.push({ id: uuid(), fazenda: A.fazenda, up: A.up, diaria: '', hora_inicio: '', hora_fim: '' }); desenharDiarias(); sujo(); $(`#di${A.diarias.length - 1}-txt`, view).focus(); };
-
-    // Insumos
-    const desenharInsumos = () => {
-      const box = $('#ap-in', view); const lista = insumos();
-      box.innerHTML = A.insumos.length ? A.insumos.map((x, i) => `<div class="item linha-in">
-        <div class="field"><label for="in${i}-n">Insumo</label><select id="in${i}-n" class="input"><option value="">Selecione</option>${lista.map((n) => `<option ${n === x.insumo ? 'selected' : ''}>${h(n)}</option>`).join('')}</select></div>
-        <div class="field"><label for="in${i}-q">Quantidade</label><input id="in${i}-q" class="input" inputmode="decimal" value="${h(x.quantidade || '')}" placeholder="0"></div>
-        <button type="button" class="icon-btn" data-rm-in="${i}" aria-label="Remover insumo ${i + 1}">${ic('lixo', 18)}</button></div>`).join('') : `<p class="muted small">Nenhum insumo neste apontamento.${lista.length ? '' : ' (A planilha de insumos não tem itens para o seu CDC.)'}</p>`;
-      A.insumos.forEach((x, i) => { $('#in' + i + '-n', view).onchange = (e) => { x.insumo = e.target.value; }; $('#in' + i + '-q', view).oninput = (e) => { x.quantidade = e.target.value; }; });
-      $$('[data-rm-in]', view).forEach((b) => (b.onclick = () => { A.insumos.splice(+b.dataset.rmIn, 1); desenharInsumos(); sujo(); }));
-    };
-    $('#ap-add-in', view).onclick = () => { A.insumos.push({ insumo: '', quantidade: '' }); desenharInsumos(); sujo(); };
-
-    // Horas paradas
-    const desenharParadas = () => {
-      const box = $('#ap-pa', view);
-      box.innerHTML = A.paradas.length ? A.paradas.map((p, i) => `<div class="item" data-i="${i}">
-        <div class="item-head"><b>Parada ${i + 1}</b><button type="button" class="icon-btn" data-rm-pa="${i}" aria-label="Remover parada ${i + 1}">${ic('lixo', 18)}</button></div>
-        <div class="field"><label for="pa${i}-m">Motivo</label><select id="pa${i}-m" class="input"><option value="">Selecione</option>${MOTIVOS.map((m) => `<option ${m === p.motivo ? 'selected' : ''}>${h(m)}</option>`).join('')}</select></div>
-        ${horasHTML('pa' + i, p.hora_inicio, p.hora_fim)}</div>`).join('') : '<p class="muted small">Nenhuma hora parada neste apontamento.</p>';
-      A.paradas.forEach((p, i) => {
-        ligarHoras(view, 'pa' + i);
-        $('#pa' + i + '-m', view).onchange = (e) => { p.motivo = e.target.value; };
-        $('#pa' + i + '-hi', view).addEventListener('input', (e) => { p.hora_inicio = e.target.value; });
-        $('#pa' + i + '-hf', view).addEventListener('input', (e) => { p.hora_fim = e.target.value; });
-      });
-      $$('[data-rm-pa]', view).forEach((b) => (b.onclick = () => { A.paradas.splice(+b.dataset.rmPa, 1); desenharParadas(); sujo(); }));
-    };
-    $('#ap-add-pa', view).onclick = () => { A.paradas.push({ id: uuid(), motivo: '', hora_inicio: '', hora_fim: '' }); desenharParadas(); sujo(); };
-
-    eqBox(); estrutura(); desenharDiarias(); desenharInsumos(); desenharParadas();
+    const ctx = { mudou: sujo };
+    F.L.atv = listaItens(view, '#ap-atv', { itens: F.atividades, aberto: ed ? -1 : 0, rotulo: 'Atividade', vazio: 'Nenhuma atividade.',
+      textoAdd: (n) => (n ? 'Adicionar outra atividade' : 'Adicionar atividade'),
+      novo: () => novaAtividade(F.fazendaPadrao()), completo: atvCompleta, resumo: atvResumo, resumoTexto: atvResumoTxt, corpo: atvCorpo,
+      ligar: (a, i, box) => atvLigar(a, i, box, { mudou: sujo, redesenhar: () => F.L.atv.desenhar() }), mudou: sujo });
+    F.L.dia = listaItens(view, '#ap-di', { itens: F.diarias, rotulo: 'Diária', vazio: 'Nenhuma diária neste apontamento.',
+      textoAdd: (n) => (n ? 'Adicionar outra diária' : 'Adicionar diária'),
+      novo: () => novaDiaria(F.fazendaPadrao()), completo: diaCompleta, resumo: diaResumo, resumoTexto: diaResumoTxt, corpo: diaCorpo,
+      ligar: (d, i, box) => diaLigar(d, i, box, ctx), mudou: sujo });
+    F.L.par = listaItens(view, '#ap-pa', { itens: F.paradas, rotulo: 'Parada', vazio: 'Nenhuma hora parada neste apontamento.',
+      textoAdd: (n) => (n ? 'Adicionar outra parada' : 'Adicionar hora parada'),
+      novo: () => novaParada(F.fazendaPadrao()), completo: parCompleta, resumo: parResumo, resumoTexto: parResumoTxt, corpo: parCorpo,
+      ligar: (p, i, box) => parLigar(p, i, box, ctx), mudou: sujo });
 
     form.onsubmit = (e) => {
       e.preventDefault();
       const err = $('.form-error', form); err.textContent = '';
-      const falha = (m, el) => { err.textContent = m; if (el) el.focus(); };
-      const data = $('#ap-data', view).value;
-      if (!data) return falha('Informe a data.', $('#ap-data', view));
-      if (data > hoje()) return falha('A data não pode ser no futuro.', $('#ap-data', view));
-      if (!A.equipe) return falha('Escolha a equipe.', $('#ap-eq', view));
-      const dados = { id: uuid(), data, equipe: A.equipe, equipe_tipo: A.tipo || null };
-      const campos = A.tipo === 'Mecanizado' ? [['trator_medio', 'ap-tm', 'Trator médio'], ['trator_pesado', 'ap-tp', 'Trator pesado'], ['caminhao', 'ap-cam', 'Caminhão'], ['drone', 'ap-dro', 'Drone']]
+      const falha = (m, el) => { err.textContent = m; if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); } return false; };
+      const data = $('#f-data', view).value;
+      if (!data) return falha('Informe a data.', $('#f-data', view));
+      if (data > hoje()) return falha('A data não pode ser no futuro.', $('#f-data', view));
+      if (!F.equipe) return falha('Escolha a equipe.', $('#ap-eq', view));
+      const dados = { id: F.id, tipo: 'apontamento', data, equipe: F.equipe, equipe_tipo: F.equipe_tipo || null };
+      const campos = F.equipe_tipo === 'Mecanizado' ? [['trator_medio', 'ap-tm', 'Trator médio'], ['trator_pesado', 'ap-tp', 'Trator pesado'], ['caminhao', 'ap-cam', 'Caminhão'], ['drone', 'ap-dro', 'Drone']]
         : [['colaboradores', 'ap-col', 'Colaboradores'], ['faltas', 'ap-fal', 'Faltas'], ['ferias', 'ap-fer', 'Férias']];
       for (const [k, id, rot] of campos) { const v = intDe(view, id); if (Number.isNaN(v)) return falha(`${rot}: use um número inteiro.`, $('#' + id, view)); dados[k] = v; }
       if ((dados.faltas || 0) + (dados.ferias || 0) > (dados.colaboradores || 0) && (dados.faltas || dados.ferias)) return falha('Faltas + férias não podem passar do número de colaboradores.', $('#ap-fal', view));
-      if (!A.fazenda) return falha('Escolha a fazenda.', $('#ap-fz', view));
-      if (!A.up) return falha('Escolha o talhão (UP).', $('#ap-up', view));
-      Object.assign(dados, { fazenda: A.fazenda, up: A.up, area_ha: areaDe(A.fazenda, A.up) });
-      for (let i = 0; i < A.diarias.length; i++) {
-        const d = A.diarias[i], pre = `Diária ${i + 1}: `;
-        if (!d.fazenda) return falha(pre + 'escolha a fazenda.', $('#di' + i + '-fz', view));
-        if (!d.up) return falha(pre + 'escolha o talhão.', $('#di' + i + '-up', view));
-        if (!String(d.diaria || '').trim()) return falha(pre + 'escreva a diária.', $('#di' + i + '-txt', view));
-        const eh = conferirHoras(d.hora_inicio, d.hora_fim, pre); if (eh) return falha(eh, $('#di' + i + '-hi', view));
-      }
-      const ins = [];
-      for (let i = 0; i < A.insumos.length; i++) {
-        const x = A.insumos[i]; if (!x.insumo && !String(x.quantidade || '').trim()) continue;   // linha vazia
-        if (!x.insumo) return falha(`Insumo ${i + 1}: escolha o insumo.`, $('#in' + i + '-n', view));
-        const q = lerNum(x.quantidade); if (!(q > 0)) return falha(`Insumo ${i + 1}: informe uma quantidade maior que zero.`, $('#in' + i + '-q', view));
-        ins.push({ insumo: x.insumo, quantidade: q });
-      }
-      for (let i = 0; i < A.paradas.length; i++) {
-        const p = A.paradas[i], pre = `Parada ${i + 1}: `;
-        if (!p.motivo) return falha(pre + 'escolha o motivo.', $('#pa' + i + '-m', view));
-        const eh = conferirHoras(p.hora_inicio, p.hora_fim, pre); if (eh) return falha(eh, $('#pa' + i + '-hi', view));
-      }
+      // cartão de atividade vazio (sem nada preenchido) é ignorado
+      F.atividades.splice(0, F.atividades.length, ...F.atividades.filter((a) => a.atividade || a.up || String(a.hectares || '').trim() || a.insumos.length));
+      F.L.atv.desenhar();
+      if (!F.atividades.length && !F.diarias.length && !F.paradas.length) return falha('Adicione pelo menos uma atividade, diária ou hora parada.');
+      if (!validarItens(F, falha)) return;
       Object.assign(dados, {
-        insumos: ins,
-        diarias: A.diarias.map((d) => ({ id: d.id, fazenda: d.fazenda, up: d.up, diaria: d.diaria.trim(), hora_inicio: d.hora_inicio, hora_fim: d.hora_fim })),
-        paradas: A.paradas.map((p) => ({ id: p.id, fazenda: A.fazenda, up: A.up, motivo: p.motivo, hora_inicio: p.hora_inicio, hora_fim: p.hora_fim })),
-        observacao: $('#ap-obs', view).value.trim() || null,
+        atividades: F.atividades.map(limparAtv), diarias: F.diarias.map(limparDia), paradas: F.paradas.map(limparPar),
+        observacao: $('#f-obs', view).value.trim() || null,
       });
-      concluir(form, 'apontamento', dados, `Apontamento de ${dataBR(data)} salvo.`);
+      guardar(form, F, dados, ed ? 'Apontamento atualizado.' : `Apontamento de ${dataBR(data)} salvo.`);
     };
   }
 
   // =========================================================
-  //   Diárias e Horas Paradas (lançamentos soltos)
+  //   Diárias e Horas Paradas (várias por lançamento)
   // =========================================================
-  function vDiaria(view) { vSolto(view, 'diaria'); }
-  function vParada(view) { vSolto(view, 'parada'); }
-  function vSolto(view, tipo) {
-    const dia = tipo === 'diaria';
-    const L = { fazenda: '', up: '' };
-    view.innerHTML = cabecalho(dia ? 'Diária' : 'Horas paradas', dia ? 'Serviço feito por diária.' : 'Registre o tempo em que a equipe ficou parada.') + `
-      <form id="f-so" class="panel" novalidate>
-        <div class="field" style="max-width:260px"><label for="so-data">Data</label><input id="so-data" type="date" class="input" value="${hoje()}" max="${hoje()}"></div>
-        <div id="so-local"></div>
-        ${dia ? `<div class="field"><label for="so-txt">Diária</label><input id="so-txt" class="input" placeholder="Ex.: limpeza de aceiro, roçada manual"></div>`
-              : `<div class="field"><label for="so-mot">Motivo</label><select id="so-mot" class="input"><option value="">Selecione</option>${MOTIVOS.map((m) => `<option>${h(m)}</option>`).join('')}</select></div>`}
-        ${horasHTML('so')}
-        <div class="field"><label for="so-obs">Observações</label><textarea id="so-obs" class="input"></textarea></div>
-        <p class="form-error" role="alert"></p>
-        <button class="btn btn-block btn-salvar" type="submit">Salvar ${dia ? 'diária' : 'hora parada'}</button>
+  function vDiarias(view) { vItens(view, 'diarias'); }
+  function vParadas(view) { vItens(view, 'paradas'); }
+  function vItens(view, tipo) {
+    const F = estadoForm(tipo); if (!F) return;
+    const dia = tipo === 'diarias'; const ed = !!F.original;
+    const lista = dia ? F.diarias : F.paradas;
+    if (!ed) lista.push(dia ? novaDiaria() : novaParada());
+    view.innerHTML = cabecalho((ed ? 'Editar ' : '') + (dia ? 'diárias' : 'horas paradas').replace(/^./, (c) => (ed ? c : c.toUpperCase())),
+      dia ? 'Serviços feitos por diária. Adicione quantas precisar.' : 'Tempo em que a equipe ou as máquinas ficaram paradas.') + `
+      <form id="f-it" class="stack" novalidate>
+        <section class="panel"><div class="field" style="max-width:260px"><label for="f-data">Data</label><input id="f-data" type="date" class="input" value="${F.data}" max="${hoje()}"></div></section>
+        <section class="panel"><h2>${dia ? 'Diárias' : 'Horas paradas'}</h2><div id="it-lista" class="itens"></div></section>
+        ${rodapeForm(F, ed ? 'Salvar alterações' : dia ? 'Salvar diárias' : 'Salvar horas paradas')}
       </form>`;
-    const form = $('#f-so', view);
-    form.addEventListener('input', () => { form.dataset.sujo = '1'; $('.form-error', form).textContent = ''; });
-    ligarLocal(view, 'so', L, () => { form.dataset.sujo = '1'; });
-    ligarHoras(view, 'so');
+    const form = $('#f-it', view);
+    const sujo = () => { form.dataset.sujo = '1'; $('.form-error', form).textContent = ''; };
+    form.addEventListener('input', sujo);
+    ligarFotos(view, 'f-fobs', F.fotos, 'obs', sujo);
+    const ctx = { mudou: sujo };
+    const L = listaItens(view, '#it-lista', dia
+      ? { itens: lista, aberto: ed ? -1 : 0, rotulo: 'Diária', vazio: 'Nenhuma diária.', textoAdd: (n) => (n ? 'Adicionar outra diária' : 'Adicionar diária'),
+          novo: () => novaDiaria(F.fazendaPadrao()), completo: diaCompleta, resumo: diaResumo, resumoTexto: diaResumoTxt, corpo: diaCorpo, ligar: (d, i, box) => diaLigar(d, i, box, ctx), mudou: sujo }
+      : { itens: lista, aberto: ed ? -1 : 0, rotulo: 'Parada', vazio: 'Nenhuma hora parada.', textoAdd: (n) => (n ? 'Adicionar outra parada' : 'Adicionar hora parada'),
+          novo: () => novaParada(F.fazendaPadrao()), completo: parCompleta, resumo: parResumo, resumoTexto: parResumoTxt, corpo: parCorpo, ligar: (p, i, box) => parLigar(p, i, box, ctx), mudou: sujo });
+    F.L = { atv: { abrir() {} }, dia: dia ? L : { abrir() {} }, par: dia ? { abrir() {} } : L };
     form.onsubmit = (e) => {
       e.preventDefault();
-      const err = $('.form-error', form); const falha = (m, el) => { err.textContent = m; if (el) el.focus(); };
-      const data = $('#so-data', view).value, hi = $('#so-hi', view).value, hf = $('#so-hf', view).value;
-      if (!data) return falha('Informe a data.', $('#so-data', view));
-      if (data > hoje()) return falha('A data não pode ser no futuro.', $('#so-data', view));
-      if (!L.fazenda) return falha('Escolha a fazenda.', $('#so-fz', view));
-      if (!L.up) return falha('Escolha o talhão (UP).', $('#so-up', view));
-      const dados = { id: uuid(), data, fazenda: L.fazenda, up: L.up, hora_inicio: hi, hora_fim: hf, observacao: $('#so-obs', view).value.trim() || null };
-      if (dia) { dados.diaria = $('#so-txt', view).value.trim(); if (!dados.diaria) return falha('Escreva a diária.', $('#so-txt', view)); }
-      else { dados.motivo = $('#so-mot', view).value; if (!dados.motivo) return falha('Escolha o motivo.', $('#so-mot', view)); }
-      const eh = conferirHoras(hi, hf, ''); if (eh) return falha(eh, $('#so-hi', view));
-      concluir(form, tipo, dados, dia ? 'Diária salva.' : 'Hora parada salva.');
+      const err = $('.form-error', form); err.textContent = '';
+      const falha = (m, el) => { err.textContent = m; if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); } return false; };
+      const data = $('#f-data', view).value;
+      if (!data) return falha('Informe a data.', $('#f-data', view));
+      if (data > hoje()) return falha('A data não pode ser no futuro.', $('#f-data', view));
+      if (!lista.length) return falha(dia ? 'Adicione pelo menos uma diária.' : 'Adicione pelo menos uma hora parada.');
+      if (!validarItens(F, falha)) return;
+      const dados = { id: F.id, tipo, data, diarias: dia ? lista.map(limparDia) : [], paradas: dia ? [] : lista.map(limparPar), observacao: $('#f-obs', view).value.trim() || null };
+      guardar(form, F, dados, ed ? 'Lançamento atualizado.' : dia ? 'Diárias salvas.' : 'Horas paradas salvas.');
     };
   }
 
   // =========================================================
-  //   Meus lançamentos
+  //   Valores (valor/hora das diárias + tarifas das atividades)
   // =========================================================
-  function vLancamentos(view) {
-    const F = S.filtro; const v = visao();
-    const desde = F.periodo === 'tudo' ? '0000-00-00' : diasAtras(Number(F.periodo) - 1);
-    const q = semAcento(F.busca).trim();
-    const passa = (x, txt) => String(x.data).slice(0, 10) >= desde && (!q || q.split(/\s+/).every((t) => semAcento(txt).includes(t)));
-    const listas = {
-      apontamentos: v.apontamentos.filter((x) => passa(x, [x.equipe, x.fazenda, 'up ' + x.up, x.observacao, ...(x.insumos || []).map((i) => i.insumo)].join(' '))),
-      diarias: v.diarias.filter((x) => passa(x, [x.diaria, x.fazenda, 'up ' + x.up, x.observacao].join(' '))),
-      paradas: v.paradas.filter((x) => passa(x, [x.motivo, x.fazenda, 'up ' + x.up, x.observacao].join(' '))),
+  function vValores(view) {
+    const fmt = (v) => (v == null || v === '' ? '' : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 }));
+    const desenhar = () => {
+      view.innerHTML = cabecalho('Valores', `Usados no faturamento do cartão do dia e no PDF. CDC: <b>${h(S.user.cdc)}</b>`) + `
+        <form id="f-val" class="panel stack-sm" novalidate>
+          <h2>Meta de faturamento</h2>
+          <div class="field"><label for="vmeta">Meta por dia</label>
+            <div class="com-unid moeda"><span>R$</span><input id="vmeta" class="input" inputmode="decimal" value="${h(fmt(S.valores._meta && S.valores._meta.valor))}" placeholder="0,00"><span>/dia</span></div>
+            <span class="hint">Sua meta diária. O cartão do dia e o PDF mostram o delta: faturamento − meta, com e sem as diárias.</span></div>
+          <h2 class="mt">Diárias · valor por hora</h2>
+          <p class="muted small">Faturamento da diária = valor/hora × horas trabalhadas × quantidade. Se o horário pegar das 11h às 12h, essa hora de almoço é descontada. Os valores valem para todos do seu CDC.</p>
+          ${RECURSOS.map((r, i) => { const v = S.valores[r]; return `<div class="field"><label for="v${i}">${h(r)}</label>
+            <div class="com-unid moeda"><span>R$</span><input id="v${i}" class="input" inputmode="decimal" value="${h(fmt(v && v.valor))}" placeholder="0,00"><span>/hora</span></div>
+            ${v && v.em ? `<span class="hint">Atualizado${v.por ? ' por ' + h(v.por) : ''} em ${dataBR(String(v.em).slice(0, 10))}</span>` : '<span class="hint">Ainda não cadastrado</span>'}</div>`; }).join('')}
+          <p class="form-error" role="alert"></p>
+          <button class="btn btn-block btn-salvar" type="submit">Salvar valores</button>
+        </form>
+        <section class="panel"><div class="sec-head"><h2>Tarifas das atividades</h2><span class="muted small">da planilha · ${atividades().length} atividades</span></div>
+          <p class="muted small">Faturamento da atividade = tarifa × quantidade realizada. Para mudar uma tarifa, altere a planilha de atividades.</p>
+          <div class="search">${ic('search', 20)}<input type="search" class="input" id="tq" placeholder="Pesquisar atividade" aria-label="Pesquisar atividade"></div>
+          <div class="tarifas" id="tl">${atividades().map((a) => `<div class="tar" data-b="${h(semAcento(a.atividade + ' ' + a.regime))}"><span><b>${h(a.atividade)}</b><small>${h(a.regime)}</small></span><b>${a.tarifa != null ? brl(a.tarifa) + '<small>/' + unidade(a.atividade) + '</small>' : '—'}</b></div>`).join('') || '<p class="muted">Não consegui ler a planilha de atividades.</p>'}</div>
+        </section>`;
+      const form = $('#f-val', view);
+      form.addEventListener('input', () => { form.dataset.sujo = '1'; $('.form-error', form).textContent = ''; });
+      $('#tq', view).oninput = (e) => { const q = semAcento(e.target.value).trim(); $$('#tl .tar', view).forEach((t) => { t.hidden = !!q && !q.split(/\s+/).every((p) => t.dataset.b.includes(p)); }); };
+      form.onsubmit = async (e) => {
+        e.preventDefault(); const err = $('.form-error', form);
+        const p = {};
+        for (let i = 0; i < RECURSOS.length; i++) {
+          const t = $('#v' + i, view).value.trim(); const n = lerNum(t);
+          if (t && !(n >= 0)) { err.textContent = `${RECURSOS[i]}: valor inválido.`; $('#v' + i, view).focus(); return; }
+          p[RECURSOS[i]] = t ? n : null;
+        }
+        const tm = $('#vmeta', view).value.trim(), nm = lerNum(tm);
+        if (tm && !(nm >= 0)) { err.textContent = 'Meta: valor inválido.'; $('#vmeta', view).focus(); return; }
+        p._meta = tm ? nm : null;
+        if (!navigator.onLine) { err.textContent = 'Para salvar os valores é preciso internet.'; return; }
+        const bt = $('.btn-salvar', form); bt.disabled = true; bt.textContent = 'Salvando…';
+        try { await sessao(); S.valores = (await rpc('pgo_salvar_valores', { p })) || {}; gravar('pgo.valores.' + S.user.cdc, S.valores); delete form.dataset.sujo; toast('Valores salvos.', 'in'); location.hash = '#/home'; }
+        catch (ex) { err.textContent = msgErro(ex); bt.disabled = false; bt.textContent = 'Salvar valores'; }
+      };
     };
-    const ABAS = [['apontamentos', 'Apontamentos'], ['diarias', 'Diárias'], ['paradas', 'Horas paradas']];
-    const lista = listas[F.aba];
-    const totMin = (l) => l.reduce((s, x) => s + minutos(hhmm(x.hora_inicio), hhmm(x.hora_fim)), 0);
-    const resumo = F.aba === 'apontamentos' ? `${lista.length} apontamento(s)` : `${lista.length} lançamento(s) · ${duracao(totMin(lista))} no total`;
-    view.innerHTML = cabecalho('Meus lançamentos', 'Só aparecem os lançamentos feitos por você.') + `
-      <div class="filtros" role="group" aria-label="Tipo">${ABAS.map(([k, t]) => `<button class="chip" data-aba="${k}" aria-pressed="${F.aba === k}">${t}<span class="n">${listas[k].length}</span></button>`).join('')}</div>
-      <div class="tools"><div class="search">${ic('search', 20)}<input type="search" class="input" id="lq" placeholder="Pesquisar equipe, fazenda, UP, motivo…" value="${h(F.busca)}" aria-label="Pesquisar"></div>
-        <select class="input periodo" id="lp" aria-label="Período">${[['1', 'Hoje'], ['7', 'Últimos 7 dias'], ['30', 'Últimos 30 dias'], ['tudo', 'Tudo']].map(([k, t]) => `<option value="${k}" ${F.periodo === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-      <p class="resumo-l">${resumo}</p>
-      <div id="ll">${lista.length ? agrupar(lista, F.aba) : `<div class="empty"><strong>Nada por aqui</strong>${q ? 'Nenhum lançamento com essa pesquisa.' : 'Nenhum lançamento neste período.'}</div>`}</div>`;
-    $$('[data-aba]', view).forEach((b) => (b.onclick = () => { F.aba = b.dataset.aba; render(true); }));
-    $('#lp', view).onchange = (e) => { F.periodo = e.target.value; render(true); };
-    $('#lq', view).oninput = (e) => { F.busca = e.target.value; clearTimeout(vLancamentos.t); vLancamentos.t = setTimeout(() => { render(true); const i = $('#lq'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 350); };
-    $$('[data-abrir]', view).forEach((b) => (b.onclick = () => detalhe(F.aba, b.dataset.abrir)));
+    desenhar();
+    const antes = JSON.stringify(S.valores);
+    carregarValores().then((ok) => { if (ok && rotaAtual() === 'valores' && JSON.stringify(S.valores) !== antes && !$('#f-val[data-sujo="1"]')) desenhar(); });
   }
-  function agrupar(lista, aba) {
-    const dias = [...new Set(lista.map((x) => String(x.data).slice(0, 10)))].sort().reverse();
-    return dias.map((d) => `<section class="dia"><h2 class="dia-tit">${dataBR(d)} <span>${diaSemana(d)}</span></h2>
-      <div class="cartoes">${lista.filter((x) => String(x.data).slice(0, 10) === d).map((x) => cartao(x, aba)).join('')}</div></section>`).join('');
-  }
-  function etiquetaFila(x) { return x._erro ? '<span class="st erro">Recusado</span>' : x._fila ? `<span class="st fila">${ic('nuvem', 14)} Na fila</span>` : ''; }
-  function cartao(x, aba) {
-    if (aba === 'apontamentos') {
-      const estr = x.equipe_tipo === 'Mecanizado'
-        ? [['trator_medio', 'tr. médio'], ['trator_pesado', 'tr. pesado'], ['caminhao', 'caminhão'], ['drone', 'drone']].filter(([k]) => x[k]).map(([k, t]) => `${x[k]} ${t}`).join(' · ')
-        : (x.colaboradores ? `${x.colaboradores} colab.${x.faltas ? ` · ${x.faltas} falta(s)` : ''}${x.ferias ? ` · ${x.ferias} férias` : ''}` : '');
-      return `<button class="lanc" data-abrir="${h(x.id)}"><span class="l-top"><b>${h(x.equipe)}</b>${etiquetaFila(x)}</span>
-        <span class="l-sub">${ic('mapa', 14)} ${h(x.fazenda)} · UP ${h(x.up)}</span>${estr ? `<span class="l-sub">${h(estr)}</span>` : ''}</button>`;
+
+  // =========================================================
+  //   WhatsApp (sem valores em dinheiro)
+  // =========================================================
+  function textoWhats(d) {
+    const regs = deDia(d); const c = calcular(regs); const L = [];
+    L.push(`*PGO Digital · ${dataBR(d)} (${diaSemana(d)})*`, `${S.user.nome} · ${S.user.cdc}`);
+    for (const r of regs) {
+      const cr = calcular([r]); L.push('');
+      if (r.tipo === 'apontamento') {
+        L.push(`👷 *${r.equipe}*${r.equipe_tipo ? ` (${r.equipe_tipo})` : ''}`);
+        const est = r.equipe_tipo === 'Mecanizado'
+          ? [['trator_medio', 'trator médio'], ['trator_pesado', 'trator pesado'], ['caminhao', 'caminhão'], ['drone', 'drone']].filter(([k]) => r[k]).map(([k, t]) => `${r[k]} ${t}`).join(' · ')
+          : (r.colaboradores ? `${r.colaboradores} colaboradores · ${Math.max(0, r.colaboradores - (r.faltas || 0) - (r.ferias || 0))} presentes${r.faltas ? ` · ${r.faltas} falta(s)` : ''}${r.ferias ? ` · ${r.ferias} férias` : ''}` : '');
+        if (est) L.push(`Estrutura: ${est}`);
+      } else L.push(r.tipo === 'diarias' ? '🕒 *Diárias*' : '⛔ *Horas paradas*');
+      if (cr.atv.length) {
+        L.push('✅ Atividades:');
+        cr.atv.forEach((a) => { L.push(`• ${a.atividade} — ${a.fazenda} UP ${a.up} — *${num(a.q)} ${a.un}*`); if ((a.insumos || []).length) L.push(`   Insumos: ${a.insumos.map((i) => `${i.insumo} ${num(i.quantidade, 3)}`).join(', ')}`); });
+      }
+      if (cr.dia.length) {
+        if (r.tipo === 'apontamento') L.push('🕒 Diárias:');
+        cr.dia.forEach((x) => L.push(`• ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''} — ${x.diaria} — ${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} (${duracao(x.ml)}${x.ml !== x.mb ? ', já descontado o almoço' : ''}) — ${x.fazenda} UP ${x.up}`));
+      }
+      if (cr.par.length) {
+        if (r.tipo === 'apontamento') L.push('⛔ Horas paradas:');
+        cr.par.forEach((x) => L.push(`• ${x.motivo} — ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''} — ${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} (${duracao(x.mb)}) — ${x.fazenda} UP ${x.up}`));
+      }
+      if (r.observacao) L.push(`📝 ${r.observacao}`);
     }
-    const m = minutos(hhmm(x.hora_inicio), hhmm(x.hora_fim));
-    return `<button class="lanc" data-abrir="${h(x.id)}"><span class="l-top"><b>${h(aba === 'diarias' ? x.diaria : x.motivo)}</b><span class="dur-tag">${duracao(m)}</span>${etiquetaFila(x)}</span>
-      <span class="l-sub">${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)} · ${h(x.fazenda)} · UP ${h(x.up)}${x.apontamento_id ? ' · no apontamento' : ''}</span></button>`;
+    const tot = [c.ha ? `${num(c.ha)} ha` : '', c.hAtv ? `${num(c.hAtv)} h de atividade` : '', c.dia.length ? `${horasTxt(c.hDia)} de diárias` : '', c.par.length ? `${horasTxt(c.hPar)} paradas` : ''].filter(Boolean);
+    if (tot.length) L.push('', `*Total do dia:* ${tot.join(' · ')}`);
+    return L.join('\n');
   }
-  function detalhe(aba, id) {
-    const v = visao(); const x = v[aba].find((y) => y.id === id); if (!x) return;
-    const linha = (r, val) => (val == null || val === '' ? '' : `<div><dt>${h(r)}</dt><dd>${val}</dd></div>`);
-    let corpo = '';
-    if (aba === 'apontamentos') {
-      const di = v.diarias.filter((d) => d.apontamento_id === x.id), pa = v.paradas.filter((p) => p.apontamento_id === x.id);
-      corpo = `<dl class="det">${linha('Data', dataBR(x.data))}${linha('Equipe', h(x.equipe) + (x.equipe_tipo ? ` <small>(${h(x.equipe_tipo)})</small>` : ''))}
-        ${linha('Local', `${h(x.fazenda)} · UP ${h(x.up)}${x.area_ha ? ` <small>(${num(x.area_ha, 2)} ha)</small>` : ''}`)}
-        ${linha('Colaboradores', x.colaboradores)}${linha('Faltas', x.faltas)}${linha('Férias', x.ferias)}
-        ${linha('Trator médio', x.trator_medio)}${linha('Trator pesado', x.trator_pesado)}${linha('Caminhão', x.caminhao)}${linha('Drone', x.drone)}
-        ${linha('Insumos', (x.insumos || []).map((i) => `${h(i.insumo)}: <b>${num(i.quantidade)}</b>`).join('<br>'))}
-        ${linha('Diárias', di.map((d) => `${h(d.diaria)} · ${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)} (${duracao(minutos(hhmm(d.hora_inicio), hhmm(d.hora_fim)))}) · ${h(d.fazenda)} UP ${h(d.up)}`).join('<br>'))}
-        ${linha('Horas paradas', pa.map((p) => `${h(p.motivo)} · ${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)} (${duracao(minutos(hhmm(p.hora_inicio), hhmm(p.hora_fim)))})`).join('<br>'))}
-        ${linha('Observação', h(x.observacao))}</dl>`;
-    } else {
-      corpo = `<dl class="det">${linha('Data', dataBR(x.data))}${linha('Local', `${h(x.fazenda)} · UP ${h(x.up)}`)}
-        ${linha(aba === 'diarias' ? 'Diária' : 'Motivo', h(aba === 'diarias' ? x.diaria : x.motivo))}
-        ${linha('Horário', `${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} · <b>${duracao(minutos(hhmm(x.hora_inicio), hhmm(x.hora_fim)))}</b>`)}
-        ${linha('Lançado', x.apontamento_id ? 'Dentro de um apontamento' : 'Avulso')}${linha('Observações', h(x.observacao))}</dl>`;
-    }
-    const tipo = { apontamentos: 'apontamento', diarias: 'diaria', paradas: 'parada' }[aba];
-    const naFilaSolto = x._fila && !(aba !== 'apontamentos' && x.apontamento_id);
-    const dentroDeApont = aba !== 'apontamentos' && x.apontamento_id;
-    const d = dialogo(`<div class="dlg"><div class="dlg-head"><h2>${h({ apontamentos: 'Apontamento', diarias: 'Diária', paradas: 'Hora parada' }[aba])}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
-      ${x._erro ? `<div class="alert alert-erro">O servidor recusou este lançamento: ${h(x._erro)}</div>` : x._fila ? '<div class="alert alert-warn">Ainda não foi enviado: será enviado quando houver internet.</div>' : ''}
-      ${corpo}
-      <div class="dlg-foot">${dentroDeApont ? '<p class="muted small">Para apagar, exclua o apontamento onde ela foi lançada.</p>'
-        : `<button class="btn btn-perigo" data-del>${ic('lixo', 18)} ${naFilaSolto ? 'Descartar' : 'Excluir'}</button>`}</div></div>`);
-    $('[data-x]', d).onclick = () => d.close();
-    const del = $('[data-del]', d);
-    if (del) del.onclick = async () => {
-      const extra = aba === 'apontamentos' ? ' As diárias e horas paradas lançadas nele também serão excluídas.' : '';
-      if (!(await confirmar('Excluir este lançamento?', 'Não dá para desfazer.' + extra, 'Excluir', true))) return;
-      if (x._fila) { salvarFila(fila().filter((y) => y.dados.id !== x.id)); d.close(); barra(); toast('Lançamento descartado.'); render(true); return; }
-      if (!navigator.onLine) return toast('Para excluir um lançamento já enviado é preciso internet.', 'erro');
-      try { await rpc('pgo_excluir', { p_tipo: tipo, p_id: x.id }); await carregarDados(); d.close(); toast('Lançamento excluído.'); render(true); }
-      catch (e) { toast(msgErro(e), 'erro'); }
-    };
+  async function copiarTexto(t) {
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch (_) { const a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', ''); a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (_) {} a.remove(); return ok; }
   }
+  function compartilhar(d) {
+    const t = textoWhats(d);
+    const dl = dialogo(`<div class="dlg"><div class="dlg-head"><h2>WhatsApp · ${dataBR(d)}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
+      <p class="muted small">Texto sem valores em dinheiro, pronto para o grupo.</p>
+      <textarea class="input whats-txt" readonly rows="12" aria-label="Texto para o WhatsApp">${h(t)}</textarea>
+      <div class="dlg-foot"><button class="btn btn-ghost" data-copiar>${ic('copiar', 18)} Copiar</button>
+        <a class="btn btn-whats" href="https://wa.me/?text=${encodeURIComponent(t)}" target="_blank" rel="noopener">${ic('whats', 18)} Abrir no WhatsApp</a></div></div>`);
+    $('[data-x]', dl).onclick = () => dl.close();
+    $('[data-copiar]', dl).onclick = async () => { if (await copiarTexto(t)) toast('Texto copiado. Cole no grupo do WhatsApp.', 'in'); else toast('Não consegui copiar. Selecione o texto e copie.', 'erro'); };
+  }
+
+  // =========================================================
+  //   PDF do dia (relatório para impressão / "Salvar como PDF")
+  // =========================================================
+  function relatorioHTML(d) {
+    const regs = deDia(d); const c = calcular(regs);
+    const equipesTxt = [...new Set(c.equipes.map((r) => r.equipe))].join(', ') || '—';
+    const pctDe = (v, t) => (t > 0 ? (v / t * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%' : '—');
+    const atvOrd = c.atv.slice().sort((a, b) => (b.valor || 0) - (a.valor || 0));
+    const insights = [];
+    if (atvOrd[0] && atvOrd[0].valor) insights.push(`Maior faturamento: <b>${h(atvOrd[0].atividade)}</b> (${brl(atvOrd[0].valor)}, ${pctDe(atvOrd[0].valor, c.com)} do total).`);
+    if (c.meta != null) {
+      insights.push(c.dCom >= 0 ? `Com as diárias a meta foi <b>batida</b>: ${daMeta(c.com, c.meta)} (${sinal(c.dCom)}).` : `Com as diárias faltaram <b>${brl(-c.dCom)}</b> para a meta (${daMeta(c.com, c.meta)}).`);
+      if (c.vd > 0) insights.push(c.dSem >= 0 ? `Só com a produção (sem diárias) a meta também foi batida (${sinal(c.dSem)}).` : `Sem as diárias faltariam <b>${brl(-c.dSem)}</b> para a meta: as diárias cobriram ${brl(c.vd)}.`);
+    } else insights.push('<span class="r-alerta">Meta diária não cadastrada (tela Valores): o delta não pôde ser calculado.</span>');
+    const motivos = Object.entries(c.parPorMot).sort((a, b) => b[1].horas - a[1].horas);
+    if (motivos.length) insights.push(`Principal motivo de parada: <b>${h(motivos[0][0])}</b> (${horasTxt(motivos[0][1].horas)}, ${pctDe(motivos[0][1].horas, c.hPar)} das horas paradas).`);
+    if (c.impacto > 0) insights.push(`As horas paradas representam uma perda estimada de <b>${brl(c.impacto)}</b> (valor/hora × horas paradas).`);
+    if (c.faltaValor.length) insights.push(`<span class="r-alerta">Sem valor/hora cadastrado para ${h(c.faltaValor.join(', '))}: essas diárias entraram como R$ 0,00.</span>`);
+    if (c.semTarifa.length) insights.push(`<span class="r-alerta">Atividade sem tarifa: ${h(c.semTarifa.join(', '))} (entrou como R$ 0,00).</span>`);
+    const barra = c.com > 0 ? `<div class="r-barra"><span class="b-atv" style="width:${(c.sem / c.com * 100).toFixed(2)}%"></span><span class="b-dia" style="width:${(c.vd / c.com * 100).toFixed(2)}%"></span></div>
+      <div class="r-leg"><span><i class="b-atv"></i>Atividades ${brl(c.sem)} (${pctDe(c.sem, c.com)})</span><span><i class="b-dia"></i>Diárias ${brl(c.vd)} (${pctDe(c.vd, c.com)})</span></div>` : '';
+    const fotos = regs.flatMap((r) => (r.fotos || []).map((f) => ({ path: f.path, leg: `${f.tipo === 'equipe' ? 'Equipe' : 'Observação'} · ${tituloReg(r)}` })));
+    const tab = (cab, nTexto, linhas, total) => `<table class="r-tab"><thead><tr>${cab.map((x, i) => `<th${i >= nTexto ? ' class="n"' : ''}>${x}</th>`).join('')}</tr></thead><tbody>${linhas.join('')}</tbody>${total ? `<tfoot>${total}</tfoot>` : ''}</table>`;
+    const nTd = (v) => `<td class="n">${v}</td>`;
+    return `<div class="rel">
+      <header class="r-cab"><div><div class="r-marca">PGO Digital</div><h1>Relatório diário de produção</h1><p class="r-data">${h(dataLonga(d))}</p></div>
+        <div class="r-quem"><b>${h(S.user.nome)}</b><span>${h(S.user.cdc)}</span><span>Equipes: ${h(equipesTxt)}</span><span>Gerado em ${new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span></div></header>
+      ${c.equipes.length ? `<h2 class="r-h2-top">Estrutura das equipes</h2>${tab(['Equipe', 'Tipo', 'Colab.', 'Faltas', 'Férias', 'Presentes', 'Tr. médio', 'Tr. pesado', 'Caminhão', 'Drone'], 2,
+        c.equipes.map((r) => `<tr><td>${h(r.equipe)}</td><td>${h(r.equipe_tipo || '—')}</td>${['colaboradores', 'faltas', 'ferias'].map((k) => nTd(r[k] ?? '—')).join('')}${nTd(r.colaboradores ? Math.max(0, r.colaboradores - (r.faltas || 0) - (r.ferias || 0)) : '—')}${['trator_medio', 'trator_pesado', 'caminhao', 'drone'].map((k) => nTd(r[k] ?? '—')).join('')}</tr>`))}` : ''}
+      <section class="r-kpis r-kpis3">
+        <div class="k k-meta"><span>Meta do dia</span><b>${c.meta != null ? brl(c.meta) : '—'}</b><small>${c.meta != null ? 'cadastrada em Valores' : 'não cadastrada'}</small></div>
+        <div class="k k-dest"><span>Faturamento com diárias</span><b>${brl(c.com)}</b><small>${c.meta != null ? daMeta(c.com, c.meta) : 'atividades + diárias'}</small></div>
+        <div class="k ${c.dCom == null ? '' : c.dCom >= 0 ? 'k-pos' : 'k-neg'}"><span>Delta com diárias</span><b>${c.dCom != null ? sinal(c.dCom) : '—'}</b><small>faturamento com diárias − meta</small></div>
+        <div class="k k-perda"><span>Horas paradas · perdas</span><b>${c.impacto > 0 ? '−' + brl(c.impacto) : brl(0)}</b><small>${horasTxt(c.hPar)} parado${c.faltaValorPar.length ? ' · sem valor/hora: ' + h(c.faltaValorPar.join(', ')) : ''}</small></div>
+        <div class="k k-sem"><span>Faturamento sem diárias</span><b>${brl(c.sem)}</b><small>${c.meta != null ? daMeta(c.sem, c.meta) : 'só atividades'}</small></div>
+        <div class="k ${c.dSem == null ? '' : c.dSem >= 0 ? 'k-pos' : 'k-neg'}"><span>Delta sem diárias</span><b>${c.dSem != null ? sinal(c.dSem) : '—'}</b><small>faturamento sem diárias − meta</small></div>
+      </section>
+      ${barra}
+      ${insights.length ? `<ul class="r-ins">${insights.map((x) => `<li>${x}</li>`).join('')}</ul>` : ''}
+      ${c.atv.length ? `<h2>Faturamento por atividade</h2>${tab(['Atividade', 'Fazenda · UP', 'Realizado', 'Tarifa', 'Valor', '% do total'], 2,
+        atvOrd.map((a) => `<tr><td>${h(a.atividade)}${a.regime ? `<small>${h(a.regime)}</small>` : ''}${(a.insumos || []).length ? `<small>Insumos: ${a.insumos.map((i) => `${h(i.insumo)} ${num(i.quantidade, 3)}`).join(', ')}</small>` : ''}</td><td>${h(a.fazenda)} · UP ${h(a.up)}</td>${nTd(`${num(a.q)} ${a.un}`)}${nTd(a.tarifa != null ? brl(a.tarifa) : '—')}${nTd(a.valor != null ? brl(a.valor) : '—')}${nTd(pctDe(a.valor || 0, c.com))}</tr>`),
+        `<tr><td colspan="2">Total das atividades (sem diárias)</td>${nTd(`${num(c.ha)} ha${c.hAtv ? ' · ' + num(c.hAtv) + ' h' : ''}`)}<td></td>${nTd(brl(c.sem))}${nTd(pctDe(c.sem, c.com))}</tr>`)}` : ''}
+      ${c.dia.length ? `<h2>Diárias</h2>${tab(['Tipo', 'Diária', 'Fazenda · UP', 'Horário', 'Horas', 'R$/h', 'Valor'], 4,
+        c.dia.map((x) => `<tr><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}</td><td>${h(x.diaria)}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}${x.ml !== x.mb ? '<small>desconta almoço</small>' : ''}</td>${nTd(horasTxt(x.horas))}${nTd(x.vh != null ? brl(x.vh) : '<span class="r-alerta">sem valor</span>')}${nTd(brl(x.valor || 0))}</tr>`),
+        Object.entries(c.diaPorRec).map(([k, v]) => `<tr class="sub"><td colspan="4">${h(k)}</td>${nTd(horasTxt(v.horas))}<td></td>${nTd(brl(v.valor))}</tr>`).join('') + `<tr><td colspan="4">Total das diárias</td>${nTd(horasTxt(c.hDia))}<td></td>${nTd(brl(c.vd))}</tr>`)}` : ''}
+      ${c.par.length ? `<h2>Horas paradas</h2>${tab(['Motivo', 'Tipo', 'Fazenda · UP', 'Horário', 'Horas', 'Perda estimada'], 4,
+        c.par.map((x) => `<tr><td>${h(x.motivo)}</td><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}</td>${nTd(horasTxt(x.horas))}${nTd(x.valor != null ? brl(x.valor) : '—')}</tr>`),
+        motivos.map(([k, v]) => `<tr class="sub"><td colspan="4">${h(k)} · ${pctDe(v.horas, c.hPar)}</td>${nTd(horasTxt(v.horas))}${nTd(v.valor ? brl(v.valor) : '—')}</tr>`).join('') + `<tr><td colspan="4">Total parado</td>${nTd(horasTxt(c.hPar))}${nTd(c.impacto ? brl(c.impacto) : '—')}</tr>`)}` : ''}
+      ${Object.keys(c.ins).length ? `<h2>Insumos aplicados</h2>${tab(['Insumo', 'Quantidade'], 1, Object.entries(c.ins).sort((a, b) => a[0].localeCompare(b[0], 'pt-BR')).map(([k, v]) => `<tr><td>${h(k)}</td>${nTd(num(v, 3))}</tr>`))}` : ''}
+      ${regs.some((r) => r.observacao) ? `<h2>Observações</h2><ul class="r-obs">${regs.filter((r) => r.observacao).map((r) => `<li><b>${h(tituloReg(r))}:</b> ${h(r.observacao)}</li>`).join('')}</ul>` : ''}
+      ${fotos.length ? `<h2>Fotos</h2><div class="r-fotos">${fotos.map((f) => `<figure><img alt="" data-path="${h(f.path)}"><figcaption>${h(f.leg)}</figcaption></figure>`).join('')}</div>` : ''}
+      <footer class="r-pe">Premissas: faturamento da atividade = tarifa da planilha × quantidade realizada. Diária = valor/hora do CDC × horas trabalhadas × quantidade, descontando o almoço (11h às 12h) quando o horário passa por ele. Delta = faturamento − meta do dia (com e sem as diárias). Perda das horas paradas = valor/hora do tipo × horas paradas × quantidade (não é descontada do faturamento).</footer>
+    </div>`;
+  }
+  async function gerarPDF(d) {
+    let box = $('#impressao'); if (!box) { box = document.createElement('div'); box.id = 'impressao'; document.body.appendChild(box); }
+    box.innerHTML = relatorioHTML(d);
+    toast('Preparando o PDF…', '', 2500);
+    await hidratarFotos(box);
+    await Promise.all($$('img', box).map((img) => (img.complete ? 0 : new Promise((ok) => { img.onload = img.onerror = ok; setTimeout(ok, 8000); }))));
+    const antes = document.title; document.title = `PGO ${dataBR(d).replace(/\//g, '-')} ${S.user.nome}`;
+    window.print();
+    setTimeout(() => { document.title = antes; }, 1500);
+  }
+  window.addEventListener('afterprint', () => { const b = $('#impressao'); if (b) b.innerHTML = ''; });
 
   // =========================================================
   //   Início
@@ -730,12 +1182,12 @@
     }
     if (S.user) {
       // entra direto com o usuário guardado; confere a sessão quando houver internet
-      S.dados = ler('pgo.dados.' + S.user.id, { apontamentos: [], diarias: [], paradas: [] });
+      carregarDoAparelho();
       shell(); render(true);
       if (navigator.onLine) {
         try { await sessao(); const u = await rpc('pgo_eu'); if (!u || !u.id) { localStorage.removeItem('pgo.usuario'); S.user = null; return telaLogin('Entre de novo com o seu nome e senha.'); } S.user = u; gravar('pgo.usuario', u); }
         catch (e) { if (!redeErro(e)) console.warn(e); }
-        await enviarFila(); await carregarDados(); render();
+        await Promise.all([carregarValores(), enviarFila()]); await carregarDados(); render();
       }
       return;
     }

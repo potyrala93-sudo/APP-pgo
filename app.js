@@ -17,7 +17,7 @@
   const configurado = /^https:\/\//.test(URL_SB) && KEY_SB.length > 20 && !/SEU-PROJETO|COLE_AQUI/.test(URL_SB + KEY_SB);
   const PLANILHAS = CFG.PLANILHAS || {};
   const MOTIVOS = (CFG.MOTIVOS && CFG.MOTIVOS.length) ? CFG.MOTIVOS : ['Chuva', 'Manutenção / quebra de máquina', 'Outros'];
-  const RECURSOS = ['Colaborador', 'Trator médio', 'Trator pesado', 'Caminhão'];
+  const RECURSOS = ['Colaborador', 'Trator médio', 'Trator pesado', 'Caminhão', 'Drone'];
   const BUCKET = 'pgo-fotos';
 
   // ---------- Utilidades ----------
@@ -591,10 +591,9 @@
       salvarFila([...fila().filter((x) => x.dados.id !== id), { dados, remover: (anterior && anterior.remover) || [], criado: dados.criado_em }]);
       barra(); render(true);
       toast(navigator.onLine ? 'Foto da equipe adicionada.' : 'Foto guardada no aparelho; vai ser enviada quando houver internet.', 'in');
-      await enviarFila(true);
-      const it = fila().find((x) => x.dados.id === id);
-      if (it && it.erro) toast('A foto não foi salva: ' + it.erro, 'erro', 9000);
-    } catch (e) { toast(msgErro(e), 'erro'); }
+      enviarFila(true).then(() => { const it = fila().find((x) => x.dados.id === id); if (it && it.erro) toast('A foto não foi salva: ' + it.erro, 'erro', 9000); });
+      return true;
+    } catch (e) { toast(msgErro(e), 'erro'); return false; }
   }
   async function excluirRegistro(x) {
     if (!(await confirmar('Excluir este lançamento?', `${h(equipeDe(x))} · ${h(tituloReg(x))} de ${dataBR(x.data)}. Não dá para desfazer; as fotos dele também são apagadas.`, 'Excluir', true))) return false;
@@ -626,26 +625,15 @@
     const lista = todas.filter((r) => dia10(r.data) >= desde && (!F.equipe || equipeDe(r) === F.equipe) && (!F.tipo || r.tipo === F.tipo)
       && (!q || q.split(/\s+/).every((t) => semAcento(textoBusca(r)).includes(t))));
     const eqs = [...new Set(todas.map(equipeDe))].sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
-    let com = 0, comM = 0, ha = 0, meta = 0, nMeta = 0;
-    grupos(lista).forEach((g) => { const m = metaGrupo(g.regs); const c = calcular(g.regs, m); com += c.com; ha += c.ha; if (m != null) { meta += m; comM += c.com; nMeta++; } });
-    const dl = nMeta ? comM - meta : null;
-    const porDia = [...new Set(lista.map((r) => dia10(r.data)))];
+    const gs = grupos(lista); const porDia = [...new Set(gs.map((g) => g.d))];
     const ABAS = [['', 'Todos'], ['apontamento', 'Apontamentos'], ['diarias', 'Diárias'], ['paradas', 'Horas paradas']];
-    view.innerHTML = cabecalho('Meus registros', 'Tudo o que você lançou. Toque para ver; use o lápis para editar e a lixeira para excluir.') + `
+    view.innerHTML = cabecalho('Meus registros', 'Tudo o que você lançou, por dia e equipe. Toque para ver; use o lápis para editar e a lixeira para excluir.') + `
       <div class="tools"><div class="search">${ic('search', 20)}<input type="search" class="input" id="rq" placeholder="Pesquisar atividade, fazenda, UP, motivo…" value="${h(F.busca)}" aria-label="Pesquisar"></div></div>
       <div class="tools"><select class="input" id="rp" aria-label="Período">${PERIODOS.map(([k, t]) => `<option value="${k}" ${F.periodo === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
         <select class="input" id="re" aria-label="Equipe"><option value="">Todas as equipes</option>${eqs.map((e) => `<option ${F.equipe === e ? 'selected' : ''}>${h(e)}</option>`).join('')}</select></div>
       <div class="filtros" role="group" aria-label="Tipo">${ABAS.map(([k, t]) => `<button class="chip" data-tipo="${k}" aria-pressed="${F.tipo === k}">${t}</button>`).join('')}</div>
-      <section class="resumo-reg" aria-label="Resumo do período">
-        <div><span>Lançamentos</span><b>${lista.length}</b></div>
-        <div><span>Produção</span><b>${num(ha)} ha</b></div>
-        <div><span>Faturamento c/ diárias</span><b>${brl(com)}</b></div>
-        <div><span>Meta</span><b>${nMeta ? brl(meta) : '—'}</b></div>
-        <div class="${dl == null ? '' : dl >= 0 ? 'pos' : 'neg'}"><span>Δ da meta</span><b>${dl == null ? '—' : sinal(dl)}</b></div>
-      </section>
       ${F.buscando ? '<p class="muted small">Buscando lançamentos mais antigos…</p>' : ''}
-      <div id="rl">${porDia.length ? porDia.map((d) => `<section class="dia"><h3 class="dia-tit">${dataBR(d)} <span>${diaSemana(d)}</span></h3>
-        <div class="dc-lista solta">${lista.filter((r) => dia10(r.data) === d).map((r) => itemReg(r, true)).join('')}</div></section>`).join('')
+      <div id="rl">${porDia.length ? porDia.map((d) => blocoDia(d, gs.filter((g) => g.d === d))).join('')
         : `<div class="empty"><strong>Nada por aqui</strong>${q || F.equipe || F.tipo ? 'Nenhum lançamento com esses filtros.' : 'Nenhum lançamento neste período.'}</div>`}</div>`;
     ligarCartoes(view);
     $('#rp', view).onchange = (e) => { F.periodo = e.target.value; render(true); };
@@ -659,17 +647,15 @@
     const x = registro(id); if (!x) return;
     const linha = (r, val) => (val == null || val === '' ? '' : `<div><dt>${h(r)}</dt><dd>${val}</dd></div>`);
     const c = calcular([x]);
-    const estr = x.tipo !== 'apontamento' ? '' : (x.equipe_tipo === 'Mecanizado'
-      ? [['trator_medio', 'trator médio'], ['trator_pesado', 'trator pesado'], ['caminhao', 'caminhão'], ['drone', 'drone']].filter(([k]) => x[k]).map(([k, t]) => `${x[k]} ${t}`).join(' · ')
-      : (x.colaboradores ? `${x.colaboradores} colaboradores · ${Math.max(0, x.colaboradores - (x.faltas || 0) - (x.ferias || 0))} presentes${x.faltas ? ` · ${x.faltas} falta(s)` : ''}${x.ferias ? ` · ${x.ferias} férias` : ''}` : ''));
+    const estr = x.tipo !== 'apontamento' ? '' : `${h(pessoasTxt(x) || '0 colaboradores')}<br>${MAQUINAS.map(([k, t]) => `${h(t)}: <b>${x[k] || 0}</b>`).join(' · ')}<br>Frota: <b>${h(x.frota || '—')}</b>`;
     const atvs = c.atv.map((a) => `<li><b>${h(a.atividade)}</b>${a.situacao ? ` <span class="sit ${a.situacao === 'Finalizado' ? 'fin' : ''}">${h(a.situacao)}</span>` : ''}<br>${h(a.fazenda)} · UP ${h(a.up)} · <b>${num(a.q)} ${a.un}</b>${a.tarifa != null ? ` · ${brl(a.tarifa)}/${a.un} = <b>${brl(a.valor)}</b>` : ''}
       ${(a.insumos || []).length ? `<br><small>Insumos: ${a.insumos.map((i) => `${h(i.insumo)} ${num(i.quantidade, 3)}`).join(' · ')}</small>` : ''}</li>`).join('');
-    const dias = c.dia.map((d) => `<li><b>${h(d.recurso)}${d.qt > 1 ? ' × ' + d.qt : ''}</b> · ${h(d.diaria)}<br>${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)} · ${duracao(d.ml)}${d.ml !== d.mb ? ' (desc. almoço)' : ''} · ${h(d.fazenda)} UP ${h(d.up)}${d.valor != null ? ` · <b>${brl(d.valor)}</b>` : ''}</li>`).join('');
-    const pars = c.par.map((p) => `<li><b>${h(p.recurso)}${p.qt > 1 ? ' × ' + p.qt : ''}</b> · ${h(p.motivo)}<br>${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)} · ${duracao(p.mb)} · ${h(p.fazenda)} UP ${h(p.up)}</li>`).join('');
+    const dias = c.dia.map((d) => `<li><b>${h(d.recurso)}${d.qt > 1 ? ' × ' + d.qt : ''}</b>${h(comFrota(d))} · ${h(d.diaria)}<br>${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)} · ${duracao(d.ml)}${d.ml !== d.mb ? ' (desc. almoço)' : ''} · ${h(d.fazenda)} UP ${h(d.up)}${d.valor != null ? ` · <b>${brl(d.valor)}</b>` : ''}</li>`).join('');
+    const pars = c.par.map((p) => `<li><b>${h(p.recurso)}${p.qt > 1 ? ' × ' + p.qt : ''}</b>${h(comFrota(p))} · ${h(p.motivo)}<br>${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)} · ${duracao(p.mb)} · ${h(p.fazenda)} UP ${h(p.up)}</li>`).join('');
     const fotos = (x.fotos || []);
     const d = dialogo(`<div class="dlg"><div class="dlg-head"><h2>${h(TIPO[x.tipo])} · ${dataBR(x.data)}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
       ${x._erro ? `<div class="alert alert-erro">O servidor recusou este lançamento: ${h(x._erro)}<br>Toque em Editar para corrigir.</div>` : x._fila ? '<div class="alert alert-warn">Ainda não foi enviado: será enviado quando houver internet.</div>' : ''}
-      <dl class="det">${linha('Equipe', h(equipeDe(x)) + (x.equipe_tipo ? ` <small>(${h(x.equipe_tipo)})</small>` : ''))}${linha('Estrutura', h(estr))}
+      <dl class="det">${linha('Equipe', h(equipeDe(x)) + (x.equipe_tipo ? ` <small>(${h(x.equipe_tipo)})</small>` : ''))}${linha('Estrutura', estr)}
         ${linha('Atividades', atvs ? `<ul class="det-l">${atvs}</ul>` : '')}${linha('Diárias', dias ? `<ul class="det-l">${dias}</ul>` : '')}
         ${linha('Horas paradas', pars ? `<ul class="det-l">${pars}</ul>` : '')}${linha('Observação', h(x.observacao))}
         ${linha('Fotos', fotos.length ? `<div class="fotos mini">${fotos.map((f) => `<button class="foto" data-ver="${h(f.path)}" title="${f.tipo === 'equipe' ? 'Foto da equipe' : 'Foto da observação'}"><img alt="" data-path="${h(f.path)}"><span>${f.tipo === 'equipe' ? 'Equipe' : 'Obs.'}</span></button>`).join('')}</div>` : '')}</dl>
@@ -756,12 +742,17 @@
     return null;
   }
   // Tipo do recurso (colaborador, trator médio, trator pesado, caminhão)
-  const recursoHTML = (pfx, atual) => `<div class="field"><span class="label" id="${pfx}-rec-l">Tipo</span>
-    <div class="seg" role="group" aria-labelledby="${pfx}-rec-l" id="${pfx}-rec">${RECURSOS.map((r) => `<button type="button" data-rec="${h(r)}" aria-pressed="${r === atual}">${h(r)}</button>`).join('')}</div></div>`;
+  const ehMaquina = (rec) => !!rec && rec !== 'Colaborador';
+  const recursoHTML = (pfx, o) => `<div class="field"><span class="label" id="${pfx}-rec-l">Tipo</span>
+    <div class="seg seg-rec" role="group" aria-labelledby="${pfx}-rec-l" id="${pfx}-rec">${RECURSOS.map((r) => `<button type="button" data-rec="${h(r)}" aria-pressed="${r === o.recurso}">${h(r)}</button>`).join('')}</div></div>
+    <div class="field" id="${pfx}-frota-box" ${ehMaquina(o.recurso) ? '' : 'hidden'}><label for="${pfx}-frota">Frota</label><input id="${pfx}-frota" class="input" value="${h(o.frota || '')}" placeholder="Ex.: 1023, 1050" autocomplete="off">
+      <span class="hint">Número da frota. Se forem várias máquinas, separe por vírgula.</span></div>`;
   function ligarRecurso(raiz, pfx, o, aoMudar) {
     $$('#' + pfx + '-rec [data-rec]', raiz).forEach((b) => (b.onclick = () => {
-      o.recurso = b.dataset.rec; $$('#' + pfx + '-rec [data-rec]', raiz).forEach((x) => x.setAttribute('aria-pressed', String(x === b))); aoMudar && aoMudar();
+      o.recurso = b.dataset.rec; $$('#' + pfx + '-rec [data-rec]', raiz).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      $('#' + pfx + '-frota-box', raiz).hidden = !ehMaquina(o.recurso); aoMudar && aoMudar();
     }));
+    $('#' + pfx + '-frota', raiz).oninput = (e) => { o.frota = e.target.value; };
   }
 
   // Fotos: lista = [{path, tipo, blob?, url?}] — as novas só vão para o aparelho ao salvar
@@ -835,7 +826,7 @@
       <div id="at${i}-local"></div>
       <div class="field campo-ha"><label for="at${i}-ha">${un === 'h' ? 'Horas realizadas' : 'Hectares realizados'}</label>
         <div class="com-unid"><input id="at${i}-ha" class="input" inputmode="decimal" value="${h(numCampo(lerNum(a.hectares)))}" placeholder="0"><span>${un}</span></div>
-        ${a.fazenda && a.up && areaDe(a.fazenda, a.up) != null ? `<span class="hint">Área do talhão: ${num(areaDe(a.fazenda, a.up))} ha</span>` : ''}</div>
+        ${a.fazenda && a.up && areaDe(a.fazenda, a.up) != null ? `<span class="hint" id="at${i}-ha-h">Área do talhão: ${num(areaDe(a.fazenda, a.up))} ha${un === 'ha' ? ' (máximo)' : ''}</span>` : ''}</div>
       <div class="field"><span class="label" id="at${i}-sit-l">Situação do talhão</span>
         <div class="seg seg-2" role="group" aria-labelledby="at${i}-sit-l" id="at${i}-sit">${SITUACOES.map((x) => `<button type="button" data-sit="${x}" aria-pressed="${a.situacao === x}">${x}</button>`).join('')}</div></div>
       <div class="sub-ins"><div class="sec-head"><span class="label">Insumos desta atividade</span><button type="button" class="btn btn-ghost btn-sm" id="at${i}-add-in">${ic('plus', 18)} Insumo</button></div>
@@ -847,30 +838,43 @@
       if (v != null && v !== a.atividade) { const r = atividadeDe(v); a.atividade = v; a.regime = r ? r.regime : ''; a.tarifa = r ? r.tarifa : null; ctx.mudou(); ctx.redesenhar(); }
     };
     ligarLocal(box, `at${i}`, a, () => { ctx.mudou(); ctx.redesenhar(); });
-    $(`#at${i}-ha`, box).oninput = (e) => { a.hectares = e.target.value; };
+    $(`#at${i}-ha`, box).oninput = (e) => {
+      a.hectares = e.target.value; const hint = $(`#at${i}-ha-h`, box); const area = areaDe(a.fazenda, a.up);
+      if (hint && unidade(a.atividade) === 'ha') hint.classList.toggle('erro', lerNum(a.hectares) > area + 1e-9);
+    };
     $$(`#at${i}-sit [data-sit]`, box).forEach((b) => (b.onclick = () => { a.situacao = b.dataset.sit; $$(`#at${i}-sit [data-sit]`, box).forEach((x) => x.setAttribute('aria-pressed', String(x === b))); ctx.mudou(); }));
     const lista = insumos();
     const desenharIns = () => {
       const el = $(`#at${i}-ins`, box);
       el.innerHTML = a.insumos.length ? a.insumos.map((x, k) => `<div class="linha-in">
-        <div class="field"><label for="at${i}-in${k}-n">Insumo</label><select id="at${i}-in${k}-n" class="input"><option value="">Selecione</option>${[...new Set([...lista, x.insumo].filter(Boolean))].map((n) => `<option ${n === x.insumo ? 'selected' : ''}>${h(n)}</option>`).join('')}</select></div>
+        ${campoEscolha(`at${i}-in${k}-n`, 'Insumo', x.insumo, lista.length ? 'Escolher insumo' : 'Planilha de insumos vazia')}
         <div class="field"><label for="at${i}-in${k}-q">Quantidade</label><input id="at${i}-in${k}-q" class="input" inputmode="decimal" value="${h(numCampo(lerNum(x.quantidade)))}" placeholder="0"></div>
         <button type="button" class="icon-btn" data-rm-in="${k}" aria-label="Remover insumo ${k + 1}">${ic('lixo', 18)}</button></div>`).join('')
         : `<p class="muted small">Nenhum insumo.${lista.length ? '' : ' (A planilha de insumos não tem itens para o seu CDC.)'}</p>`;
-      a.insumos.forEach((x, k) => { $(`#at${i}-in${k}-n`, box).onchange = (e) => { x.insumo = e.target.value; }; $(`#at${i}-in${k}-q`, box).oninput = (e) => { x.quantidade = e.target.value; }; });
+      a.insumos.forEach((x, k) => {
+        $(`#at${i}-in${k}-n`, box).onclick = async () => {
+          const v = await escolher('Insumo', lista.map((n) => ({ v: n, t: n })), x.insumo);
+          if (v != null) { x.insumo = v; desenharIns(); ctx.mudou(); const q = $(`#at${i}-in${k}-q`, box); if (q && !q.value) q.focus(); }
+        };
+        $(`#at${i}-in${k}-q`, box).oninput = (e) => { x.quantidade = e.target.value; };
+      });
       $$('[data-rm-in]', el).forEach((b) => (b.onclick = () => { a.insumos.splice(+b.dataset.rmIn, 1); desenharIns(); ctx.mudou(); }));
     };
-    $(`#at${i}-add-in`, box).onclick = () => { a.insumos.push({ insumo: '', quantidade: '' }); desenharIns(); ctx.mudou(); $(`#at${i}-in${a.insumos.length - 1}-n`, box).focus(); };
+    $(`#at${i}-add-in`, box).onclick = async () => {
+      const v = await escolher('Insumo', lista.map((n) => ({ v: n, t: n })), '');
+      if (v == null) return;
+      a.insumos.push({ insumo: v, quantidade: '' }); desenharIns(); ctx.mudou(); $(`#at${i}-in${a.insumos.length - 1}-q`, box).focus();
+    };
     desenharIns();
   }
 
   // ----- Diária -----
   const novaDiaria = (fz) => ({ recurso: '', quantidade: 1, fazenda: fz || '', up: '', diaria: '', hora_inicio: '', hora_fim: '' });
   const diaCompleta = (d) => !!(d.recurso && d.fazenda && d.up && String(d.diaria || '').trim() && d.hora_inicio && d.hora_fim && d.hora_inicio !== d.hora_fim);
-  const diaResumoTxt = (d) => [d.recurso && `${d.recurso}${d.quantidade > 1 ? ' × ' + d.quantidade : ''}`, d.diaria, d.hora_inicio && d.hora_fim && `${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)}`].filter(Boolean).join(' · ');
-  const diaResumo = (d) => `<b>${h([d.recurso && `${d.recurso}${d.quantidade > 1 ? ' × ' + d.quantidade : ''}`, d.diaria].filter(Boolean).join(' · ') || 'Diária sem dados')}</b>
+  const diaResumoTxt = (d) => [d.recurso && `${d.recurso}${d.quantidade > 1 ? ' × ' + d.quantidade : ''}${ehMaquina(d.recurso) && d.frota ? ' (frota ' + d.frota + ')' : ''}`, d.diaria, d.hora_inicio && d.hora_fim && `${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)}`].filter(Boolean).join(' · ');
+  const diaResumo = (d) => `<b>${h([d.recurso && `${d.recurso}${d.quantidade > 1 ? ' × ' + d.quantidade : ''}${ehMaquina(d.recurso) && d.frota ? ' · frota ' + d.frota : ''}`, d.diaria].filter(Boolean).join(' · ') || 'Diária sem dados')}</b>
     <small>${h([d.hora_inicio && d.hora_fim && `${hhmm(d.hora_inicio)}–${hhmm(d.hora_fim)} (${duracao(minLiquidos(d.hora_inicio, d.hora_fim))})`, d.fazenda && `${d.fazenda}${d.up ? ' · UP ' + d.up : ''}`].filter(Boolean).join(' · ') || 'Toque para preencher')}</small>`;
-  const diaCorpo = (d, i) => `${recursoHTML('di' + i, d.recurso)}
+  const diaCorpo = (d, i) => `${recursoHTML('di' + i, d)}
     <div class="grid-qt">${contador(`di${i}-qt`, 'Quantidade', d.quantidade || 1)}
       <div class="field"><label for="di${i}-txt">Diária</label><input id="di${i}-txt" class="input" value="${h(d.diaria || '')}" placeholder="Ex.: limpeza de aceiro, roçada manual"></div></div>
     <div id="di${i}-local"></div>
@@ -888,9 +892,9 @@
   const novaParada = (fz) => ({ recurso: '', quantidade: 1, fazenda: fz || '', up: '', motivo: '', hora_inicio: '', hora_fim: '' });
   const parCompleta = (p) => !!(p.recurso && p.fazenda && p.up && p.motivo && p.hora_inicio && p.hora_fim && p.hora_inicio !== p.hora_fim);
   const parResumoTxt = (p) => [p.recurso && `${p.recurso}${p.quantidade > 1 ? ' × ' + p.quantidade : ''}`, p.motivo, p.hora_inicio && p.hora_fim && `${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)}`].filter(Boolean).join(' · ');
-  const parResumo = (p) => `<b>${h([p.motivo, p.recurso && `${p.recurso}${p.quantidade > 1 ? ' × ' + p.quantidade : ''}`].filter(Boolean).join(' · ') || 'Parada sem dados')}</b>
+  const parResumo = (p) => `<b>${h([p.motivo, p.recurso && `${p.recurso}${p.quantidade > 1 ? ' × ' + p.quantidade : ''}${ehMaquina(p.recurso) && p.frota ? ' · frota ' + p.frota : ''}`].filter(Boolean).join(' · ') || 'Parada sem dados')}</b>
     <small>${h([p.hora_inicio && p.hora_fim && `${hhmm(p.hora_inicio)}–${hhmm(p.hora_fim)} (${duracao(minutos(p.hora_inicio, p.hora_fim))})`, p.fazenda && `${p.fazenda}${p.up ? ' · UP ' + p.up : ''}`].filter(Boolean).join(' · ') || 'Toque para preencher')}</small>`;
-  const parCorpo = (p, i) => `${recursoHTML('pa' + i, p.recurso)}
+  const parCorpo = (p, i) => `${recursoHTML('pa' + i, p)}
     <div class="grid-qt">${contador(`pa${i}-qt`, 'Quantidade', p.quantidade || 1)}
       <div class="field"><label for="pa${i}-m">Motivo</label><select id="pa${i}-m" class="input"><option value="">Selecione</option>${[...new Set([...MOTIVOS, p.motivo].filter(Boolean))].map((m) => `<option ${m === p.motivo ? 'selected' : ''}>${h(m)}</option>`).join('')}</select></div></div>
     <div id="pa${i}-local"></div>
@@ -912,6 +916,8 @@
       if (!a.fazenda) return ir('escolha a fazenda.', 'fz');
       if (!a.up) return ir('escolha o talhão (UP).', 'up');
       const q = lerNum(a.hectares); if (!(q > 0)) return ir(`informe ${unidade(a.atividade) === 'h' ? 'as horas realizadas' : 'os hectares realizados'} (maior que zero).`, 'ha');
+      const area = areaDe(a.fazenda, a.up);
+      if (unidade(a.atividade) === 'ha' && area != null && q > area + 1e-9) return ir(`os hectares realizados (${num(q)} ha) passam da área do talhão UP ${a.up} (${num(area)} ha).`, 'ha');
       if (!a.situacao) return ir('informe se o talhão está em andamento ou finalizado.', 'sit button');
       for (let k = 0; k < a.insumos.length; k++) {
         const x = a.insumos[k];
@@ -922,7 +928,7 @@
     for (const [lista, nome, pfx, L] of [[F.diarias, 'Diária', 'di', F.L.dia], [F.paradas, 'Hora parada', 'pa', F.L.par]]) {
       for (let i = 0; i < lista.length; i++) {
         const d = lista[i], pre = `${nome} ${i + 1}: `; const ir = (m, campo) => { L.abrir(i); return falha(pre + m, campo && $(`#${pfx}${i}-${campo}`)); };
-        if (!d.recurso) return ir('escolha o tipo (colaborador, trator médio, trator pesado ou caminhão).', 'rec button');
+        if (!d.recurso) return ir('escolha o tipo (colaborador, trator médio, trator pesado, caminhão ou drone).', 'rec button');
         if (!(parseInt(d.quantidade, 10) >= 1)) return ir('a quantidade precisa ser 1 ou mais.', 'qt');
         if (pfx === 'di' && !String(d.diaria || '').trim()) return ir('escreva a diária.', 'txt');
         if (pfx === 'pa' && !d.motivo) return ir('escolha o motivo.', 'm');
@@ -934,8 +940,8 @@
     return true;
   }
   const limparAtv = (a) => ({ atividade: a.atividade, regime: a.regime || null, tarifa: a.tarifa, fazenda: a.fazenda, up: a.up, area_ha: areaDe(a.fazenda, a.up), hectares: lerNum(a.hectares), situacao: a.situacao || null, insumos: a.insumos.map((x) => ({ insumo: x.insumo, quantidade: lerNum(x.quantidade) })) });
-  const limparDia = (d) => ({ recurso: d.recurso, quantidade: parseInt(d.quantidade, 10) || 1, fazenda: d.fazenda, up: d.up, diaria: String(d.diaria).trim(), hora_inicio: hhmm(d.hora_inicio), hora_fim: hhmm(d.hora_fim) });
-  const limparPar = (p) => ({ recurso: p.recurso, quantidade: parseInt(p.quantidade, 10) || 1, fazenda: p.fazenda, up: p.up, motivo: p.motivo, hora_inicio: hhmm(p.hora_inicio), hora_fim: hhmm(p.hora_fim) });
+  const limparDia = (d) => ({ recurso: d.recurso, frota: ehMaquina(d.recurso) ? (String(d.frota || '').trim() || null) : null, quantidade: parseInt(d.quantidade, 10) || 1, fazenda: d.fazenda, up: d.up, diaria: String(d.diaria).trim(), hora_inicio: hhmm(d.hora_inicio), hora_fim: hhmm(d.hora_fim) });
+  const limparPar = (p) => ({ recurso: p.recurso, frota: ehMaquina(p.recurso) ? (String(p.frota || '').trim() || null) : null, quantidade: parseInt(p.quantidade, 10) || 1, fazenda: p.fazenda, up: p.up, motivo: p.motivo, hora_inicio: hhmm(p.hora_inicio), hora_fim: hhmm(p.hora_fim) });
 
   // Salvar (novo ou edição): fotos novas vão para o aparelho, o lançamento entra na fila e é enviado
   async function guardar(form, F, dados, msgOk) {
@@ -1033,23 +1039,30 @@
       $('#ap-eq-box', view).innerHTML = campoEscolha('ap-eq', 'Equipe', F.equipe, equipes().length ? 'Escolher equipe' : 'Sem equipes para o seu CDC', [e ? e.tipo : F.equipe_tipo, e && e.meta ? 'meta ' + brl(e.meta) : ''].filter(Boolean).join(' · '));
       $('#ap-eq', view).onclick = async () => {
         const v = await escolher('Equipe', equipes().map((x) => ({ v: x.equipe, t: x.equipe, sub: [x.tipo, x.meta ? 'meta ' + brl(x.meta) : ''].filter(Boolean).join(' · ') })), F.equipe);
-        if (v != null) { const x = equipes().find((q) => q.equipe === v); const tipoAntes = F.equipe_tipo; F.equipe = v; F.equipe_tipo = x ? x.tipo : ''; eqBox(); if (tipoAntes !== F.equipe_tipo || !$('#ap-estr .contador', view)) estrutura(); sujo(); }
+        if (v != null) { const x = equipes().find((q) => q.equipe === v); const tipoAntes = F.equipe_tipo; F.equipe = v; F.equipe_tipo = x ? x.tipo : ''; eqBox(); estrutura(); sujo(); }
       };
+    };
+    const frotaVis = () => {
+      const b = $('#ap-frota-box', view); if (!b) return;
+      const maq = ['ap-tm', 'ap-tp', 'ap-cam', 'ap-dro'].reduce((t, id) => t + (intDe(view, id) || 0), 0);
+      b.hidden = !(F.equipe_tipo === 'Mecanizado' || maq > 0);
     };
     const estrutura = () => {
       const el = $('#ap-estr', view); const o = F.o;
       if (!F.equipe) { el.innerHTML = '<p class="muted">Escolha a equipe para preencher a estrutura.</p>'; return; }
-      if (F.equipe_tipo === 'Mecanizado') {
-        el.innerHTML = `<p class="muted small">Equipe mecanizada: quantidade de máquinas no dia.</p><div class="contadores">
-          ${contador('ap-tm', 'Trator médio', o.trator_medio)}${contador('ap-tp', 'Trator pesado', o.trator_pesado)}${contador('ap-cam', 'Caminhão', o.caminhao)}${contador('ap-dro', 'Drone', o.drone)}</div>`;
-        ligarContadores(el); return;
-      }
-      el.innerHTML = `<p class="muted small">Equipe ${F.equipe_tipo === 'Manual' ? 'manual' : ''}: pessoas no dia.</p><div class="contadores">
-        ${contador('ap-col', 'Colaboradores', o.colaboradores)}${contador('ap-fal', 'Faltas', o.faltas)}${contador('ap-fer', 'Férias', o.ferias)}</div><p class="presentes" id="ap-pres"></p>`;
-      const pres = () => { const c = intDe(view, 'ap-col') || 0, f = intDe(view, 'ap-fal') || 0, r = intDe(view, 'ap-fer') || 0; const el2 = $('#ap-pres', view);
-        el2.textContent = c ? `Presentes: ${Math.max(0, c - f - r)} de ${c}` : ''; el2.classList.toggle('erro', f + r > c && c > 0); };
+      if ($('#ap-col', el)) { frotaVis(); return; }
+      el.innerHTML = `<p class="muted small">Pessoas: coloque em <b>Colaboradores</b> quem trabalhou. Férias e faltas são a mais (ex.: 20 + 2 férias + 1 falta = estrutura de 23).</p>
+        <div class="contadores">${contador('ap-col', 'Colaboradores', o.colaboradores)}${contador('ap-fer', 'Férias', o.ferias)}${contador('ap-fal', 'Faltas', o.faltas)}</div>
+        <p class="presentes" id="ap-pres"></p>
+        <p class="label sub-tit">Máquinas no dia</p>
+        <div class="contadores">${contador('ap-tm', 'Trator médio', o.trator_medio)}${contador('ap-tp', 'Trator pesado', o.trator_pesado)}${contador('ap-cam', 'Caminhão', o.caminhao)}${contador('ap-dro', 'Drone', o.drone)}</div>
+        <div class="field" id="ap-frota-box" hidden><label for="ap-frota">Frota</label><input id="ap-frota" class="input" value="${h(o.frota || '')}" placeholder="Ex.: 1023, 1050" autocomplete="off">
+          <span class="hint">Número da frota das máquinas. Se forem várias, separe por vírgula.</span></div>`;
+      const pres = () => { const c = intDe(view, 'ap-col') || 0, f = intDe(view, 'ap-fal') || 0, r = intDe(view, 'ap-fer') || 0;
+        $('#ap-pres', view).textContent = c + f + r ? `Estrutura: ${c + f + r} colaboradores (${c} trabalhando${r ? ` + ${r} de férias` : ''}${f ? ` + ${f} falta${f > 1 ? 's' : ''}` : ''})` : ''; };
       $$('#ap-col,#ap-fal,#ap-fer', view).forEach((i) => i.addEventListener('input', pres));
-      ligarContadores(el, pres); pres();
+      $$('#ap-tm,#ap-tp,#ap-cam,#ap-dro', view).forEach((i) => i.addEventListener('input', frotaVis));
+      ligarContadores(el, () => { pres(); frotaVis(); }); pres(); frotaVis();
     };
     eqBox(); estrutura();
     ligarFotos(view, 'f-feq', F.fotos, 'equipe', sujo);
@@ -1078,10 +1091,10 @@
       if (data > hoje()) return falha('A data não pode ser no futuro.', $('#f-data', view));
       if (!F.equipe) return falha('Escolha a equipe.', $('#ap-eq', view));
       const dados = { id: F.id, tipo: 'apontamento', data, equipe: F.equipe, equipe_tipo: F.equipe_tipo || null, meta: metaParaSalvar(F) };
-      const campos = F.equipe_tipo === 'Mecanizado' ? [['trator_medio', 'ap-tm', 'Trator médio'], ['trator_pesado', 'ap-tp', 'Trator pesado'], ['caminhao', 'ap-cam', 'Caminhão'], ['drone', 'ap-dro', 'Drone']]
-        : [['colaboradores', 'ap-col', 'Colaboradores'], ['faltas', 'ap-fal', 'Faltas'], ['ferias', 'ap-fer', 'Férias']];
+      const campos = [['colaboradores', 'ap-col', 'Colaboradores'], ['faltas', 'ap-fal', 'Faltas'], ['ferias', 'ap-fer', 'Férias'],
+        ['trator_medio', 'ap-tm', 'Trator médio'], ['trator_pesado', 'ap-tp', 'Trator pesado'], ['caminhao', 'ap-cam', 'Caminhão'], ['drone', 'ap-dro', 'Drone']];
       for (const [k, id, rot] of campos) { const v = intDe(view, id); if (Number.isNaN(v)) return falha(`${rot}: use um número inteiro.`, $('#' + id, view)); dados[k] = v; }
-      if ((dados.faltas || 0) + (dados.ferias || 0) > (dados.colaboradores || 0) && (dados.faltas || dados.ferias)) return falha('Faltas + férias não podem passar do número de colaboradores.', $('#ap-fal', view));
+      dados.frota = $('#ap-frota-box', view).hidden ? null : ($('#ap-frota', view).value.trim() || null);
       // cartão de atividade vazio (sem nada preenchido) é ignorado
       F.atividades.splice(0, F.atividades.length, ...F.atividades.filter((a) => a.atividade || a.up || String(a.hectares || '').trim() || a.insumos.length));
       F.L.atv.desenhar();
@@ -1190,33 +1203,42 @@
   // =========================================================
   //   WhatsApp (sem valores em dinheiro) — vai com a foto da equipe
   // =========================================================
-  function estruturaTxt(r) {
-    return r.equipe_tipo === 'Mecanizado'
-      ? [['trator_medio', 'trator médio'], ['trator_pesado', 'trator pesado'], ['caminhao', 'caminhão'], ['drone', 'drone']].filter(([k]) => r[k]).map(([k, t]) => `${r[k]} ${t}`).join(' · ')
-      : (r.colaboradores ? `${r.colaboradores} colaboradores · ${Math.max(0, r.colaboradores - (r.faltas || 0) - (r.ferias || 0))} presentes${r.faltas ? ` · ${r.faltas} falta(s)` : ''}${r.ferias ? ` · ${r.ferias} férias` : ''}` : '');
+  const MAQUINAS = [['trator_medio', 'Trator médio', 'trator médio'], ['trator_pesado', 'Trator pesado', 'trator pesado'], ['caminhao', 'Caminhão', 'caminhão'], ['drone', 'Drone', 'drone']];
+  const estruturaTotal = (r) => (r.colaboradores || 0) + (r.ferias || 0) + (r.faltas || 0);
+  function pessoasTxt(r) {
+    const t = estruturaTotal(r); if (!t) return '';
+    return `${t} colaboradores (${r.colaboradores || 0} trabalhando${r.ferias ? ` + ${r.ferias} de férias` : ''}${r.faltas ? ` + ${r.faltas} falta${r.faltas > 1 ? 's' : ''}` : ''})`;
   }
+  const maquinasTxt = (r) => MAQUINAS.filter(([k]) => r[k]).map(([k, , t]) => `${r[k]} ${t}`).join(' · ');
+  const comFrota = (x) => (x.frota ? ` (frota ${x.frota})` : '');
   function textoWhats(g) {
     const c = calcular(g.regs); const L = []; const tp = tipoEquipe(g);
-    L.push(`*PGO Digital · ${g.equipe}*${tp ? ` (${tp})` : ''}`, `${dataBR(g.d)} (${diaSemana(g.d)}) · ${S.user.nome}`);
-    c.equipes.map(estruturaTxt).filter(Boolean).forEach((e) => L.push(`👷 Estrutura: ${e}`));
+    const SIT = { Finalizado: '✅', 'Em andamento': '🔄' };
+    L.push(`📋 *${g.equipe}*${tp ? ` · ${tp}` : ''}`, `📅 ${dataBR(g.d)} (${diaSemana(g.d)}) · ${S.user.nome}`);
+    c.equipes.forEach((r) => {
+      L.push('', '*ESTRUTURA*');
+      L.push(`👷 *Colaboradores:* ${r.colaboradores || 0}${r.ferias ? ` + ${r.ferias} férias` : ''}${r.faltas ? ` + ${r.faltas} falta${r.faltas > 1 ? 's' : ''}` : ''} · estrutura *${estruturaTotal(r)}*`);
+      L.push(`🚜 *Máquinas:* ${MAQUINAS.map(([k, t]) => `${t} *${r[k] || 0}*`).join(' · ')}`);
+      L.push(`🔢 *Frota:* ${r.frota || '—'}`);
+    });
     if (c.atv.length) {
-      L.push('', '✅ *Atividades*');
+      L.push('', '*ATIVIDADES*');
       c.atv.forEach((a) => {
-        L.push(`• ${a.atividade} — ${a.fazenda} UP ${a.up} — *${num(a.q)} ${a.un}*${a.situacao ? ` — ${a.situacao === 'Finalizado' ? 'talhão finalizado' : 'em andamento'}` : ''}`);
-        if ((a.insumos || []).length) L.push(`   Insumos: ${a.insumos.map((i) => `${i.insumo} ${num(i.quantidade, 3)}`).join(', ')}`);
+        L.push(`${SIT[a.situacao] || '▫️'} *${a.atividade}*`, `     ${a.fazenda} · UP ${a.up} · *${num(a.q)} ${a.un}*`);
+        if ((a.insumos || []).length) L.push(`     🧪 ${a.insumos.map((i) => `${i.insumo} *${num(i.quantidade, 3)}*`).join(' · ')}`);
       });
     }
     if (c.dia.length) {
-      L.push('', '🕒 *Diárias*');
-      c.dia.forEach((x) => L.push(`• ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''} — ${x.diaria} — ${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} (${duracao(x.ml)}${x.ml !== x.mb ? ', já descontado o almoço' : ''}) — ${x.fazenda} UP ${x.up}`));
+      L.push('', '*DIÁRIAS*');
+      c.dia.forEach((x) => L.push(`🕒 *${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''}*${comFrota(x)} · ${x.diaria}`, `     ${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)} · *${duracao(x.ml)}*${x.ml !== x.mb ? ' (sem o almoço)' : ''} · ${x.fazenda} UP ${x.up}`));
     }
     if (c.par.length) {
-      L.push('', '⛔ *Horas paradas*');
-      c.par.forEach((x) => L.push(`• ${x.motivo} — ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''} — ${hhmm(x.hora_inicio)} às ${hhmm(x.hora_fim)} (${duracao(x.mb)}) — ${x.fazenda} UP ${x.up}`));
+      L.push('', '*HORAS PARADAS*');
+      c.par.forEach((x) => L.push(`⛔ *${x.motivo}* · ${x.recurso}${x.qt > 1 ? ' ×' + x.qt : ''}${comFrota(x)}`, `     ${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)} · *${duracao(x.mb)}* · ${x.fazenda} UP ${x.up}`));
     }
-    g.regs.filter((r) => r.observacao).forEach((r, i) => { if (!i) L.push(''); L.push(`📝 ${r.observacao}`); });
-    const tot = [c.ha ? `${num(c.ha)} ha` : '', c.hAtv ? `${num(c.hAtv)} h de atividade` : '', c.dia.length ? `${horasTxt(c.hDia)} de diárias` : '', c.par.length ? `${horasTxt(c.hPar)} paradas` : ''].filter(Boolean);
-    if (tot.length) L.push('', `*Total:* ${tot.join(' · ')}`);
+    const obs = g.regs.filter((r) => r.observacao);
+    if (obs.length) { L.push(''); obs.forEach((r) => L.push(`📝 ${r.observacao}`)); }
+    if (c.atv.some((a) => a.situacao)) L.push('', '_✅ finalizado · 🔄 em andamento_');
     return L.join('\n');
   }
   async function copiarTexto(t) {
@@ -1241,13 +1263,19 @@
     const dl = dialogo(`<div class="dlg"><div class="dlg-head"><h2>WhatsApp · ${h(g.equipe)}</h2><button class="icon-btn" data-x aria-label="Fechar">${ic('x')}</button></div>
       <p class="muted small">Texto sem valores em dinheiro${fotos.length ? ', com a foto da equipe' : ''}.</p>
       ${fotos.length ? `<div class="fotos mini">${fotos.map((f) => `<div class="foto"><img alt="Foto da equipe" data-path="${h(f.path)}"></div>`).join('')}</div>`
-        : `<p class="dc-alerta">Este dia ainda não tem foto da equipe. Use o botão ${ic('camera', 15)} no apontamento para adicionar.</p>`}
+        : '<p class="dc-alerta">Este dia ainda não tem foto da equipe. Adicione agora para ela ir junto na mensagem.</p>'}
+      <label class="btn btn-ghost btn-sm foto-add ${fotos.length ? '' : 'destaque'}">${ic('camera', 18)} ${fotos.length ? 'Adicionar outra foto da equipe' : 'Adicionar foto da equipe'}<input type="file" accept="image/*" class="sr-only" data-foto-w></label>
       <textarea class="input whats-txt" readonly rows="10" aria-label="Texto para o WhatsApp">${h(t)}</textarea>
       <div class="dlg-foot"><button class="btn btn-ghost" data-copiar>${ic('copiar', 18)} Copiar texto</button>
         <button class="btn btn-whats" data-enviar>${ic('whats', 18)} Enviar no WhatsApp</button></div></div>`);
     hidratarFotos(dl);
     let arquivos = null; const pronto = arquivosDasFotos(fotos, nomeArq).then((a) => (arquivos = a));
     $('[data-x]', dl).onclick = () => dl.close();
+    $('[data-foto-w]', dl).onchange = async (e) => {
+      const a = e.target.files && e.target.files[0]; e.target.value = ''; if (!a) return;
+      const alvo = g.regs.find((r) => r.tipo === 'apontamento') || g.regs[0];
+      if (await fotoEquipeRapida(alvo.id, a)) { dl.close(); setTimeout(() => compartilhar(chave), 120); }
+    };
     $('[data-copiar]', dl).onclick = async () => { if (await copiarTexto(t)) toast('Texto copiado. Cole no grupo do WhatsApp.', 'in'); else toast('Não consegui copiar. Selecione o texto e copie.', 'erro'); };
     $('[data-enviar]', dl).onclick = async () => {
       await copiarTexto(t);   // se o WhatsApp não levar o texto junto com a foto, é só colar
@@ -1275,7 +1303,8 @@
     const barra = c.com > 0 ? `<div class="r-barra"><span class="b-atv" style="width:${(c.sem / c.com * 100).toFixed(2)}%"></span><span class="b-dia" style="width:${(c.vd / c.com * 100).toFixed(2)}%"></span></div>
       <div class="r-leg"><span><i class="b-atv"></i>Atividades ${brl(c.sem)} (${pctDe(c.sem, c.com)})</span><span><i class="b-dia"></i>Diárias ${brl(c.vd)} (${pctDe(c.vd, c.com)})</span></div>` : '';
     const fotosEq = fotosEquipe(regs);
-    const obsBlocos = regs.map((r) => ({ titulo: tituloReg(r), texto: r.observacao, fotos: (r.fotos || []).filter((f) => f.tipo !== 'equipe') })).filter((o) => o.texto || o.fotos.length);
+    const todasFotos = [...fotosEq.map((f) => ({ path: f.path, leg: 'Foto da equipe' })),
+      ...regs.flatMap((r) => (r.fotos || []).filter((f) => f.tipo !== 'equipe').map((f) => ({ path: f.path, leg: `Observação · ${tituloReg(r)}` })))];
     const tab = (cab, nTexto, linhas, total) => `<table class="r-tab"><thead><tr>${cab.map((x, i) => `<th${i >= nTexto ? ' class="n"' : ''}>${x}</th>`).join('')}</tr></thead><tbody>${linhas.join('')}</tbody>${total ? `<tfoot>${total}</tfoot>` : ''}</table>`;
     const nTd = (v) => `<td class="n">${v}</td>`;
     const tp = tipoEquipe(g);
@@ -1285,10 +1314,11 @@
         <div class="r-quem"><b>${h(S.user.nome)}</b><span>${h(S.user.cdc)}</span><span>Gerado em ${new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span></div></header>
       <section class="r-topo ${fotosEq.length ? '' : 'sem-foto'}">
         <div class="r-estr"><h2 class="r-h2-top">Estrutura da equipe</h2>
-          ${c.equipes.length ? tab(['Tipo', 'Colab.', 'Faltas', 'Férias', 'Presentes', 'Tr. médio', 'Tr. pesado', 'Caminhão', 'Drone'], 1,
-            c.equipes.map((r) => `<tr><td>${h(r.equipe_tipo || '—')}</td>${['colaboradores', 'faltas', 'ferias'].map((k) => nTd(r[k] ?? '—')).join('')}${nTd(r.colaboradores ? Math.max(0, r.colaboradores - (r.faltas || 0) - (r.ferias || 0)) : '—')}${['trator_medio', 'trator_pesado', 'caminhao', 'drone'].map((k) => nTd(r[k] ?? '—')).join('')}</tr>`))
+          ${c.equipes.length ? c.equipes.map((r) => `<div class="r-est">${[['Colaboradores', r.colaboradores], ['Férias', r.ferias], ['Faltas', r.faltas], ['Estrutura total', estruturaTotal(r)],
+              ...MAQUINAS.map(([k, t]) => [t, r[k]])].map(([t, v], k) => `<div class="${k === 3 ? 'tot' : ''}"><span>${h(t)}</span><b>${h(v || 0)}</b></div>`).join('')}
+              <div class="r-est-frota"><span>Frota</span><b>${h(r.frota || '—')}</b></div></div>`).join('')
             : '<p class="r-vazio">Sem apontamento de estrutura neste dia.</p>'}</div>
-        ${fotosEq.length ? `<figure class="r-fotoeq"><img alt="Foto da equipe" data-path="${h(fotosEq[0].path)}"><figcaption>Foto da equipe${fotosEq.length > 1 ? ` (+${fotosEq.length - 1} no fim)` : ''}</figcaption></figure>` : ''}
+        ${fotosEq.length ? `<figure class="r-fotoeq"><img alt="Foto da equipe" data-path="${h(fotosEq[0].path)}"><figcaption>Foto da equipe</figcaption></figure>` : ''}
       </section>
       <section class="r-kpis r-kpis3">
         <div class="k k-meta"><span>Meta da equipe</span><b>${meta != null ? brl(meta) : '—'}</b><small>${meta != null ? 'da planilha de equipes' : 'sem meta na planilha'}</small></div>
@@ -1303,11 +1333,11 @@
         atvOrd.map((a) => `<tr><td>${h(a.atividade)}${a.regime ? `<small>${h(a.regime)}</small>` : ''}${(a.insumos || []).length ? `<small>Insumos: ${a.insumos.map((i) => `${h(i.insumo)} ${num(i.quantidade, 3)}`).join(', ')}</small>` : ''}</td><td>${h(a.fazenda)} · UP ${h(a.up)}</td><td>${a.situacao ? `<span class="r-sit ${a.situacao === 'Finalizado' ? 'fin' : ''}">${h(a.situacao)}</span>` : '—'}</td>${nTd(`${num(a.q)} ${a.un}`)}${nTd(a.tarifa != null ? brl(a.tarifa) : '—')}${nTd(a.valor != null ? brl(a.valor) : '—')}</tr>`),
         `<tr><td colspan="3">Total das atividades (sem diárias)</td>${nTd(`${num(c.ha)} ha${c.hAtv ? ' · ' + num(c.hAtv) + ' h' : ''}`)}<td></td>${nTd(brl(c.sem))}</tr>`)}` : ''}
       ${c.dia.length ? `<h2>Diárias</h2>${tab(['Tipo', 'Diária', 'Fazenda · UP', 'Horário', 'Horas', 'R$/h', 'Valor'], 4,
-        c.dia.map((x) => `<tr><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}</td><td>${h(x.diaria)}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}${x.ml !== x.mb ? '<small>desconta almoço</small>' : ''}</td>${nTd(horasTxt(x.horas))}${nTd(x.vh != null ? brl(x.vh) : '<span class="r-alerta">sem valor</span>')}${nTd(brl(x.valor || 0))}</tr>`),
+        c.dia.map((x) => `<tr><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}${x.frota ? `<small>frota ${h(x.frota)}</small>` : ''}</td><td>${h(x.diaria)}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}${x.ml !== x.mb ? '<small>desconta almoço</small>' : ''}</td>${nTd(horasTxt(x.horas))}${nTd(x.vh != null ? brl(x.vh) : '<span class="r-alerta">sem valor</span>')}${nTd(brl(x.valor || 0))}</tr>`),
         Object.entries(c.diaPorRec).map(([k, v]) => `<tr class="sub"><td colspan="4">${h(k)}</td>${nTd(horasTxt(v.horas))}<td></td>${nTd(brl(v.valor))}</tr>`).join('') + `<tr><td colspan="4">Total das diárias</td>${nTd(horasTxt(c.hDia))}<td></td>${nTd(brl(c.vd))}</tr>`)}` : ''}
       <h2>Horas paradas e perdas</h2>
       ${c.par.length ? tab(['Motivo', 'Tipo', 'Fazenda · UP', 'Horário', 'Horas', 'R$/h', 'Perda'], 4,
-        c.par.map((x) => `<tr><td>${h(x.motivo)}</td><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}</td>${nTd(horasTxt(x.horas))}${nTd(x.vh != null ? brl(x.vh) : '<span class="r-alerta">sem valor</span>')}${nTd(x.valor != null ? '−' + brl(x.valor) : '—')}</tr>`),
+        c.par.map((x) => `<tr><td>${h(x.motivo)}</td><td>${h(x.recurso)}${x.qt > 1 ? ' × ' + x.qt : ''}${x.frota ? `<small>frota ${h(x.frota)}</small>` : ''}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td><td>${hhmm(x.hora_inicio)}–${hhmm(x.hora_fim)}</td>${nTd(horasTxt(x.horas))}${nTd(x.vh != null ? brl(x.vh) : '<span class="r-alerta">sem valor</span>')}${nTd(x.valor != null ? '−' + brl(x.valor) : '—')}</tr>`),
         motivos.map(([k, v]) => `<tr class="sub"><td colspan="4">${h(k)} · ${pctDe(v.horas, c.hPar)} do tempo parado</td>${nTd(horasTxt(v.horas))}<td></td>${nTd(v.valor ? '−' + brl(v.valor) : '—')}</tr>`).join('') + `<tr><td colspan="4">Total parado</td>${nTd(horasTxt(c.hPar))}<td></td>${nTd(c.impacto ? '−' + brl(c.impacto) : brl(0))}</tr>`)
         : '<p class="r-vazio">Nenhuma hora parada lançada.</p>'}
       <h2>Insumos gastos</h2>
@@ -1315,26 +1345,30 @@
         insLinhas.map((x) => `<tr><td>${h(x.insumo)}</td><td>${h(x.atividade)}</td><td>${h(x.fazenda)} · UP ${h(x.up)}</td>${nTd(num(x.quantidade, 3))}</tr>`),
         Object.entries(c.ins).sort((a, b) => a[0].localeCompare(b[0], 'pt-BR')).map(([k, v]) => `<tr class="sub"><td colspan="3">Total de ${h(k)}</td>${nTd(num(v, 3))}</tr>`).join(''))
         : '<p class="r-vazio">Nenhum insumo lançado.</p>'}
-      <h2>Observações e fotos</h2>
-      ${obsBlocos.length || fotosEq.length > 1 ? obsBlocos.map((o) => `<div class="r-obs-b"><p><b>${h(o.titulo)}</b>${o.texto ? ': ' + h(o.texto) : ''}</p>
-          ${o.fotos.length ? `<div class="r-fotos">${o.fotos.map((f) => `<figure><img alt="" data-path="${h(f.path)}"></figure>`).join('')}</div>` : ''}</div>`).join('')
-        + (fotosEq.length > 1 ? `<div class="r-obs-b"><p><b>Outras fotos da equipe</b></p><div class="r-fotos">${fotosEq.slice(1).map((f) => `<figure><img alt="" data-path="${h(f.path)}"></figure>`).join('')}</div></div>` : '')
-        : '<p class="r-vazio">Nenhuma observação lançada.</p>'}
+      <h2>Observações</h2>
+      ${regs.some((r) => r.observacao) ? `<ul class="r-obs">${regs.filter((r) => r.observacao).map((r) => `<li><b>${h(tituloReg(r))}:</b> ${h(r.observacao)}</li>`).join('')}</ul>` : '<p class="r-vazio">Nenhuma observação lançada.</p>'}
+      <h2>Fotos</h2>
+      ${todasFotos.length ? `<div class="r-fotos">${todasFotos.map((f) => `<figure><img alt="" data-path="${h(f.path)}"><figcaption>${h(f.leg)}</figcaption></figure>`).join('')}</div>`
+        : '<p class="r-vazio">Nenhuma foto lançada. Adicione a foto da equipe pela câmera no cartão da equipe.</p>'}
       <footer class="r-pe">Premissas: faturamento da atividade = tarifa da planilha × quantidade realizada. Diária = valor/hora do CDC × horas trabalhadas × quantidade, descontando o almoço (11h às 12h) quando o horário passa por ele. Meta = coluna METAS da planilha de equipes. Delta = faturamento − meta (com e sem as diárias). Perda das horas paradas = valor/hora × horas paradas × quantidade (não é descontada do faturamento).</footer>
     </div>`;
   }
   async function gerarPDF(chave) {
     const g = grupo(chave); if (!g) return;
-    let box = $('#impressao'); if (!box) { box = document.createElement('div'); box.id = 'impressao'; document.body.appendChild(box); }
+    let box = $('#impressao'); if (!box) { box = document.createElement('div'); box.id = 'impressao'; box.setAttribute('aria-hidden', 'true'); document.body.appendChild(box); }
     box.innerHTML = relatorioHTML(g);
     toast('Preparando o PDF…', '', 2500);
     await hidratarFotos(box);
-    await Promise.all($$('img', box).map((img) => (img.complete ? 0 : new Promise((ok) => { img.onload = img.onerror = ok; setTimeout(ok, 8000); }))));
+    await Promise.all($$('img', box).map(async (img) => {
+      if (!img.complete) await new Promise((ok) => { img.onload = img.onerror = ok; setTimeout(ok, 10000); });
+      try { await img.decode(); } catch (_) {}
+      if (!img.naturalWidth) { const fig = img.closest('figure'); if (fig) fig.classList.add('sem-img'); }
+    }));
     const antes = document.title; document.title = `PGO ${g.equipe} ${dataBR(g.d).replace(/\//g, '-')}`;
     window.print();
     setTimeout(() => { document.title = antes; }, 1500);
   }
-  window.addEventListener('afterprint', () => { const b = $('#impressao'); if (b) b.innerHTML = ''; });
+  // o relatório fica no #impressao (fora da tela) até gerar o próximo: no celular a impressão termina depois do window.print()
 
   // =========================================================
   //   Início

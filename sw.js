@@ -1,5 +1,5 @@
 /* Service worker do PGO Digital: o app abre mesmo sem internet (os lançamentos ficam na fila do aparelho) */
-const VERSAO = 'pgo-v5';
+const VERSAO = 'pgo-v8';
 const ARQUIVOS = ['./', 'index.html', 'styles.css', 'config.js', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 const CDNS = ['cdn.jsdelivr.net', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSAO).then((c) => c.addAll(ARQUIVOS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())); });

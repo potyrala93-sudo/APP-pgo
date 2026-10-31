@@ -386,12 +386,12 @@ h2.mt { margin-top: 10px; }
 .whats-txt { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .84rem; line-height: 1.45; min-height: 220px; }
 
 /* ===================== Relatório (PDF) ===================== */
-#impressao { display: none; }
+#impressao { position: absolute; left: -12000px; top: 0; width: 760px; pointer-events: none; }
 @media print {
   @page { size: A4; margin: 11mm 10mm; }
   html, body { background: #fff !important; }
   body > *:not(#impressao) { display: none !important; }
-  #impressao { display: block; }
+  #impressao { position: static; left: auto; width: auto; display: block; }
 }
 .rel { font-family: var(--font); color: #17201b; background: #fff; font-size: 9.6pt; line-height: 1.35; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .rel h2 { font-size: 11.5pt; margin: 14px 0 6px; padding-bottom: 3px; border-bottom: 2px solid #2d5a4b; color: #2d5a4b; break-after: avoid; }
@@ -504,3 +504,47 @@ h2.mt { margin-top: 10px; }
 .r-sit.fin { background: #e2f1e5; color: #2d6a3e; }
 
 .r-obs-b { margin-bottom: 10px; break-inside: avoid; } .r-obs-b p { margin: 0 0 6px; }
+
+/* ===================== PGO Digital v2.2 ===================== */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* nomes compridos (ex.: SERV PLANTIO/01_MAN) quebram a linha em vez de invadir o vizinho */
+.escolha-btn, .opc b, .opc small, .dc-txt b, .dc-txt small, .tar span b, .ec-tit h4, .det dd, .item-head b { overflow-wrap: anywhere; word-break: break-word; }
+.escolha-btn { line-height: 1.25; padding-top: 10px; padding-bottom: 10px; }
+.escolha-btn small { margin-top: 2px; line-height: 1.3; }
+.item-mini .t b, .item-mini .t small { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.3; }
+.item-mini { align-items: center; }
+.seg.seg-rec { grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 620px) { .seg.seg-rec { grid-template-columns: repeat(3, 1fr); } }
+.seg button { line-height: 1.2; overflow-wrap: anywhere; }
+.sub-tit { margin: 14px 0 6px; font-weight: 700; }
+.hint.erro { color: var(--danger); font-weight: 700; }
+.linha-in { grid-template-columns: 1fr 110px 44px; }
+.linha-in .escolha-btn { min-height: 48px; }
+@media (max-width: 420px) { .linha-in { grid-template-columns: 1fr 88px 40px; } }
+
+/* PDF: texto sem cortar nem sobrepor */
+.rel, .rel * { line-height: 1.3; }
+.rel h1, .rel h2, .rel p, .rel td, .rel th, .rel span, .rel b, .rel small, .rel figcaption { overflow-wrap: anywhere; word-break: break-word; }
+.r-cab > div:first-child { min-width: 0; flex: 1; }
+.r-cab h1 { font-size: 15pt; font-stretch: normal; line-height: 1.2; }
+.r-quem { flex: none; max-width: 40%; }
+.r-tab { table-layout: auto; }
+.r-tab th, .r-tab td { padding: 4px 5px; }
+.r-tab .n { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+.r-kpis .k { min-width: 0; }
+.r-kpis .k span { line-height: 1.2; }
+.r-kpis .k b { font-size: 12.5pt; font-stretch: normal; line-height: 1.2; white-space: nowrap; }
+.r-kpis .k small { line-height: 1.25; }
+.r-est { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin-bottom: 6px; }
+.r-est > div { border: 1px solid #d3dcd6; border-radius: 6px; padding: 4px 7px; display: grid; min-width: 0; }
+.r-est span { font-size: 7pt; text-transform: uppercase; letter-spacing: .04em; color: #5a6a61; font-weight: 700; }
+.r-est b { font-size: 11pt; }
+.r-est .r-est-frota { grid-column: 1 / -1; }
+.r-topo { grid-template-columns: minmax(0, 1fr) 180px; }
+.seg button { overflow-wrap: normal; word-break: normal; hyphens: none; }
+@media (max-width: 440px) { .seg.seg-rec { grid-template-columns: 1fr 1fr; } }
+
+.foto-add.destaque { border-color: var(--euca); color: var(--euca); border-width: 2px; }
+.r-fotos figure.sem-img { display: none; }
+.r-fotos img { height: 170px; }
+.r-est .tot { background: #f6f8f6; border-color: #b7c4bc; }
